@@ -82,6 +82,9 @@ def _exact(expr: str, get):
             return _bin(n.op, ev(n.left), ev(n.right))
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "abs":
             return abs(ev(n.args[0]))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "ttm":
+            return ev(n.args[0])                    # one period makes up the year
+        # (a TTM over several periods is covered by the hand-computed tests)
         if isinstance(n, ast.UnaryOp):
             return -ev(n.operand)
         if isinstance(n, (ast.Name, ast.Attribute)):
@@ -116,8 +119,8 @@ class TestAgreesWithExactArithmetic(unittest.TestCase):
         # process must not change the draw or the set of formulas checked
         core = [n for n in metrics.REGISTRY if not n.startswith("india.")]
         raw = {name: D(rnd.randint(10_000, 99_999_999)).scaleb(-rnd.randint(0, 4)) for name in core}
-        ev = Evaluator(make_record(raw),
-                       price=SharePrice(1, date(2026, 12, 31), "137.3719", "USD"))
+        rec = make_record(raw)                      # a full year, so its trailing twelve months is itself
+        ev = Evaluator(rec, price=SharePrice(1, date(2026, 12, 31), "137.3719", "USD"), window=[rec])
         price = Fraction("137.3719")
         checked = 0
 

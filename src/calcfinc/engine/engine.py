@@ -81,6 +81,7 @@ class EngineError(Exception):
 
 
 _KINDS = ("latest", "latest_annual", "latest_quarter", "latest_month")
+_YEAR_OF = {"month": 12, "quarter": 4, "half": 2, "year": 1}     # periods that make up one year
 _FY_RE = re.compile(r"FY(\d{4})(?:Q([1-4]))?", re.I)
 _MONTH_RE = re.compile(r"(\d{4})-(0[1-9]|1[0-2])")
 
@@ -247,6 +248,27 @@ class FinancialEngine:
                 return r if lo <= (rec.period_end - r.period_end).days <= hi else None
         return None
 
+    def _window(self, records: list[PeriodRecord], rec: PeriodRecord) -> tuple[list[PeriodRecord] | None, str]:
+        """The adjacent periods of the same kind that make up one year and end at `rec`
+        (4 quarters, 12 months, 2 half-years, or the year itself). A gap means no window."""
+        n = _YEAR_OF.get(rec.period_type or "")
+        if n is None or rec.period_end is None:
+            return None, ("trailing twelve months needs a month, quarter, half-year or year period, "
+                          f"but {rec.label} is none of these")
+        lo, hi = getattr(self._windows, rec.period_type or "year")
+        chain = [rec]
+        for r in reversed(records[:records.index(rec)]):
+            if len(chain) == n:
+                break
+            if r.period_type == rec.period_type and r.is_annual == rec.is_annual and r.period_end:
+                if not lo <= (chain[0].period_end - r.period_end).days <= hi:  # type: ignore[operator]
+                    break
+                chain.insert(0, r)
+        if len(chain) < n:
+            return None, (f"trailing twelve months needs {n} adjacent {rec.period_type} periods ending at "
+                          f"{rec.label}, found {len(chain)}")
+        return chain, ""
+
     def _evaluator(self, ent: Entity, records: list[PeriodRecord], rec: PeriodRecord,
                    *, with_price: bool = False) -> Evaluator:
         price = reason = None
@@ -259,14 +281,17 @@ class FinancialEngine:
                     price = None
                     reason = (f"no share price within {PRICE_WINDOW_DAYS} days of {rec.period_end} "
                               f"for {ent.name}")
-        return Evaluator(rec, prior=self._prior(records, rec), price=price, price_reason=reason)
+        window, window_reason = self._window(records, rec)
+        return Evaluator(rec, prior=self._prior(records, rec), price=price, price_reason=reason,
+                         window=window, window_reason=window_reason)
 
     def _formula_result(self, kind: str, ent: Entity, spec: RatioSpec, basis: Basis | str,
                         period: Any) -> EngineResult:
         records = self._records(ent, basis)
         price_dep = ratios.needs_price(spec.name)
-        if price_dep and period == "latest":
-            period = "latest_annual"          # valuation is priced at fiscal year ends
+        ttm = ratios.uses_ttm(spec.name)
+        if price_dep and not ttm and period == "latest":
+            period = "latest_annual"          # valuation is priced at fiscal year ends, unless it uses TTM
         label = "valuation" if price_dep else kind
         cache: dict[int, tuple[Evaluator, Outcome]] = {}
 
@@ -276,11 +301,11 @@ class FinancialEngine:
                 cache[id(r)] = (ev, ev.value(spec.name))
             return cache[id(r)]
 
-        base = (lambda r: r.is_annual) if price_dep else (lambda r: True)
+        base = (lambda r: r.is_annual) if price_dep and not ttm else (lambda r: True)
         rec = self._select(records, period, lambda r: base(r) and run(r)[1].value is not None)
         if rec is None:
             probe = self._select(records, period, base)
-            why = (f"no {'annual ' if price_dep else ''}period for {ent.name} ({basis}, period={period})"
+            why = (f"no {'annual ' if price_dep and not ttm else ''}period for {ent.name} ({basis}, period={period})"
                    if probe is None else f"{run(probe)[1].reason} [{probe.label}]")
             return EngineResult(label, spec.name, None, unit=spec.unit, entity=ent.name,
                                 basis=Basis(basis).value, formula=spec.formula,
@@ -296,7 +321,8 @@ class FinancialEngine:
             label, spec.name, out.value, unit=cur if (spec.unit == "currency" and cur) else spec.unit,
             entity=ent.name, basis=rec.basis, period=rec.label, formula=out.formula or spec.formula,
             inputs=out.leaves, components=comps, currency=cur, definition_version=spec.version,
-            limitations=out.notes + _flow_stock_note(rec, spec.name, out.leaves) + _flag_limits(rec, used))
+            limitations=out.notes + (() if ttm else _flow_stock_note(rec, spec.name, out.leaves))
+            + _flag_limits(rec, used))
 
     def _value_in(self, ent: Entity, records: list[PeriodRecord], rec: PeriodRecord,
                   name: str) -> Decimal | None:

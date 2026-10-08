@@ -13,7 +13,7 @@ from decimal import Decimal
 from calcfinc.engine.records import PeriodRecord
 from calcfinc.fact import SharePrice
 from calcfinc.formula import CalcError, evaluate, names_in
-from calcfinc.num import ZERO, to_text
+from calcfinc.num import ZERO, add, to_text
 from calcfinc.registry.ratios import FORMULAS, PERIOD_DAYS, PRICE, RatioSpec
 
 _CURRENCY_UNITS = frozenset({"currency", "per_share"})
@@ -49,11 +49,14 @@ class Evaluator:
     (for prior(x)); `price` is the close at the record's period end (for share_price)."""
 
     def __init__(self, rec: PeriodRecord, *, prior: PeriodRecord | None = None,
-                 price: SharePrice | None = None, price_reason: str | None = None) -> None:
+                 price: SharePrice | None = None, price_reason: str | None = None,
+                 window: list[PeriodRecord] | None = None, window_reason: str | None = None) -> None:
         self.rec = rec
         self.price = price
         self._price_reason = price_reason
         self._prior = Evaluator(prior) if prior is not None else None
+        self._window = window                  # the adjacent periods making up a year, ending at `rec`
+        self._window_reason = window_reason
         self._memo: dict[str, Outcome] = {}
         self._stack: list[str] = []
 
@@ -69,6 +72,8 @@ class Evaluator:
             if self._prior is None:
                 return _fail(f"{inner}: no earlier comparable period to compare with")
             return self._prior.value(inner)
+        if name.startswith("ttm(") and name.endswith(")"):
+            return self._ttm(name[len("ttm("):-1])
         if name == PRICE:
             if self.price is None or self.price.close is None:
                 return _fail(self._price_reason or "share_price is not available")
@@ -85,6 +90,26 @@ class Evaluator:
         if spec is not None:
             return self._spec(spec)
         return self._leaf(name)
+
+    def _ttm(self, inner: str) -> Outcome:
+        """Sum `inner` over the window. Each period is evaluated on its own, so a derived flow
+        such as EBITDA is summed from the periods' own EBITDA, not recomputed from sums."""
+        if self._window is None:
+            return _fail(f"{inner}: {self._window_reason or 'trailing twelve months is not available'}")
+        total = ZERO
+        leaves: list[FactRef] = []
+        notes: list[str] = []
+        currencies: set[str] = set()
+        for r in self._window:
+            out = self.value(inner) if r is self.rec else Evaluator(r).value(inner)
+            if out.value is None:
+                return _fail(f"{inner}: {out.reason} [{r.label}]")
+            total = add(total, out.value)
+            leaves.extend(out.leaves)
+            notes.extend(out.notes)
+            currencies |= out.currencies
+        return Outcome(total, notes=tuple(dict.fromkeys(notes)), leaves=tuple(dict.fromkeys(leaves)),
+                       currencies=frozenset(currencies))
 
     def _leaf(self, name: str) -> Outcome:
         v = self.rec.values.get(name)
@@ -121,7 +146,8 @@ class Evaluator:
         for n in names_in(expr):
             child = self.value(n)
             if child.value is None:
-                if n in spec.optional and n not in FORMULAS and n != PRICE and not n.startswith("prior("):
+                if (n in spec.optional and n not in FORMULAS and n != PRICE
+                        and not n.startswith(("prior(", "ttm("))):
                     env[n] = ZERO
                     zero_filled.append(n)
                 else:

@@ -3,7 +3,8 @@
 Allowed: number literals (read from the source text, so `0.1` is exactly Decimal("0.1")),
 + - * / **, unary +/-, parentheses, names bound in the environment (dotted names such as
 `bank.advances` are looked up as strings, never as attributes), and the functions
-abs, min, max, round, sqrt and prior(name). `prior(x)` is the value of `x` one comparable
+abs, min, max, round, sqrt, prior(name) and ttm(name). `ttm(x)` is the sum of `x` over the latest
+adjacent periods that make up a year (4 quarters, 12 months...). `prior(x)` is the value of `x` one comparable
 period earlier. Everything else raises CalcError (a ValueError).
 """
 from __future__ import annotations
@@ -26,7 +27,8 @@ class MissingInput(CalcError):
         self.name = name
 
 
-_FUNCS = {"abs", "min", "max", "round", "sqrt", "prior"}
+WINDOWED = ("prior", "ttm")          # functions that read other periods; they take one metric name
+_FUNCS = {"abs", "min", "max", "round", "sqrt", *WINDOWED}
 
 
 def _parse(expr: str) -> ast.Expression:
@@ -53,11 +55,11 @@ def names_in(expr: str) -> tuple[str, ...]:
     def walk(node: ast.AST, in_prior: bool) -> None:
         if isinstance(node, ast.Call):
             fn = node.func.id if isinstance(node.func, ast.Name) else None
-            if fn == "prior" and len(node.args) == 1:
+            if fn in WINDOWED and len(node.args) == 1:
                 inner = _dotted(node.args[0])
                 if inner is None:
-                    raise CalcError("prior() takes a single metric name")
-                out[f"prior({inner})"] = None
+                    raise CalcError(f"{fn}() takes a single metric name")
+                out[f"{fn}({inner})"] = None
                 return
             for a in node.args:
                 walk(a, in_prior)
@@ -133,11 +135,11 @@ def evaluate(expr: str, env: Mapping[str, Any]) -> Decimal:
             if node.keywords:
                 raise CalcError("keyword arguments are not allowed")
             fn = node.func.id
-            if fn == "prior":
+            if fn in WINDOWED:
                 inner = _dotted(node.args[0]) if len(node.args) == 1 else None
                 if inner is None:
-                    raise CalcError("prior() takes a single metric name")
-                return lookup(f"prior({inner})")
+                    raise CalcError(f"{fn}() takes a single metric name")
+                return lookup(f"{fn}({inner})")
             args = [ev(a) for a in node.args]
             if fn == "abs" and len(args) == 1:
                 return args[0].copy_abs()

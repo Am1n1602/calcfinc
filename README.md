@@ -58,7 +58,11 @@ a custom DSCR ratio, and cross-currency comparison. The fact and CSV format is d
 
 It will not convert currencies, so amounts in different currencies are listed but never ranked
 (ratios compare freely). It will not annualise a quarterly or monthly ratio, and says so when a
-ratio mixes flows with balances over part of a year. It does not ship any market or vendor data.
+ratio mixes flows with balances over part of a year. For a full-year view of quarterly or monthly
+data, use the trailing-twelve-month ratios (`roe_ttm`, `net_profit_margin_ttm`, `pe_ttm`,
+`ev_ebitda_ttm`, ...). They sum the latest four adjacent quarters (or twelve months) and return
+`None`, with the reason, if any period is missing, rather than stretching the window. It does not
+ship any market or vendor data.
 
 Results are calculations, not investment advice.
 

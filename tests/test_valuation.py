@@ -72,6 +72,21 @@ class TestValuation(unittest.TestCase):
         self.assertEqual(self.eng.get_valuation("VAL", "ev_ebit").value.quantize(D("1e-6")),
                          D("15"))                                                            # 2100 / (130 + 10 = 140)
 
+    def test_enterprise_value_adds_minority_interest_and_preferred_equity(self):
+        # without them, EV is market cap + net debt and the result says they were treated as 0
+        plain = self.eng.get_valuation("VAL", "enterprise_value")
+        self.assertEqual(plain.value, 2100)
+        self.assertTrue(any("minority_interest, preferred_equity not reported; treated as 0" in x
+                            for x in plain.limitations))
+        self.repos.facts.add_many([_fact(self.eid, "minority_interest", 50, instant=True),
+                                   _fact(self.eid, "preferred_equity", 30, instant=True)])
+        eng = FinancialEngine(self.repos)
+        full = eng.get_valuation("VAL", "enterprise_value")                    # 2000 + 100 + 50 + 30
+        self.assertEqual(full.value, 2180)
+        self.assertFalse(any("treated as 0 in enterprise_value" in x for x in full.limitations))
+        self.assertEqual(eng.get_ratio("VAL", "ev_ebitda").value, D("13.625"))     # 2180 / 160
+        self.assertEqual(eng.get_valuation("VAL", "ev_sales").value, D("2.18"))    # 2180 / 1000
+
     def test_latest_defaults_to_the_latest_annual_period_for_valuation(self):
         self.assertEqual(self.eng.get_ratio("VAL", "pe").value, 20)
 

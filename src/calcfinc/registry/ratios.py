@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from calcfinc.formula import CalcError, names_in
+from calcfinc.formula import WINDOWED, CalcError, names_in
 from calcfinc.registry import metrics
 
 PRICE = "share_price"
@@ -70,6 +70,14 @@ FORMULAS: dict[str, RatioSpec] = {}
 ALIASES: dict[str, str] = {}
 
 
+def split_windowed(name: str) -> tuple[str | None, str]:
+    """'ttm(net_profit)' -> ('ttm', 'net_profit'); a plain name -> (None, name)."""
+    for fn in WINDOWED:
+        if name.startswith(fn + "(") and name.endswith(")"):
+            return fn, name[len(fn) + 1:-1]
+    return None, name
+
+
 def _known(name: str) -> bool:
     return name in (PRICE, PERIOD_DAYS) or name in FORMULAS or metrics.is_known(name)
 
@@ -83,11 +91,15 @@ def register_ratio(spec: RatioSpec, *, aliases: tuple[str, ...] = ()) -> RatioSp
     if metrics.is_known(spec.name):
         raise ValueError(f"{spec.name!r} is already a reported metric name")
     for n in spec.all_inputs:
-        base = n[len("prior("):-1] if n.startswith("prior(") else n
+        fn, base = split_windowed(n)
         if base != spec.name and not _known(base):
             raise ValueError(f"{spec.name}: unknown input {base!r}; register_metric() it first")
-        if base == spec.name and not n.startswith("prior("):
+        if base == spec.name and fn is None:
             raise ValueError(f"{spec.name}: a formula cannot use itself as input")
+        reported = metrics.get(base)
+        if fn == "ttm" and reported is not None and reported.is_point_in_time:
+            raise ValueError(f"{spec.name}: ttm({base}) sums a balance-sheet item, which is meaningless; "
+                             "use the period-end value")
     FORMULAS[spec.name] = spec
     for a in aliases:
         ALIASES[a.strip().lower()] = spec.name
@@ -116,7 +128,19 @@ def needs_price(name: str, _seen: frozenset[str] = frozenset()) -> bool:
     if spec is None or name in _seen:
         return False
     for n in spec.all_inputs:
-        if n == PRICE or needs_price(n, _seen | {name}):
+        if n == PRICE or needs_price(split_windowed(n)[1], _seen | {name}):
+            return True
+    return False
+
+
+def uses_ttm(name: str, _seen: frozenset[str] = frozenset()) -> bool:
+    """True when the formula (directly or through other formulas) uses ttm(...)."""
+    spec = FORMULAS.get(name)
+    if spec is None or name in _seen:
+        return False
+    for n in spec.all_inputs:
+        fn, base = split_windowed(n)
+        if fn == "ttm" or uses_ttm(base, _seen | {name}):
             return True
     return False
 
@@ -177,8 +201,9 @@ _r("bank.operating_income", "currency", "bank.operating_profit + bank.operating_
 # --------------------------------------------------------------------------- #
 _r("market_cap", "currency", "share_price * shares_outstanding", "Market capitalisation",
    aliases=("mcap", "marketcap", "market_capitalisation", "market_capitalization"))
-_r("enterprise_value", "currency", "market_cap + net_debt", "Enterprise value",
-   aliases=("ev",))
+_r("enterprise_value", "currency", "market_cap + net_debt + minority_interest + preferred_equity",
+   "Enterprise value (market cap + net debt + minority interest + preferred equity)",
+   optional=("minority_interest", "preferred_equity"), aliases=("ev",))
 _r("pe", "x", "share_price / eps", "Price / earnings", requires_positive=("eps",),
    aliases=("p/e", "pe_ratio", "price_to_earnings", "price_earnings"))
 _r("pb", "x", "market_cap / total_equity", "Price / book", requires_positive=("total_equity",),
@@ -278,6 +303,29 @@ _r("cash_conversion", "x", "operating_cash_flow / net_profit",
 _r("capex_to_revenue", "pct", "100 * capex / top_line", "Capex / top line")
 _r("capex_to_depreciation", "x", "capex / depreciation", "Capex / depreciation")
 _r("cash_flow_to_debt", "x", "operating_cash_flow / total_debt", "Operating cash flow / debt")
+# --- trailing twelve months: the latest adjacent periods that make a year (4 quarters, 12 months).
+# None, with a reason, if any of them is missing. Balances stay period-end; flows are summed. ---
+_r("revenue_ttm", "currency", "ttm(revenue)", "Revenue, trailing twelve months")
+_r("net_profit_ttm", "currency", "ttm(net_profit)", "Net profit, trailing twelve months")
+_r("ebit_ttm", "currency", "ttm(ebit)", "EBIT, trailing twelve months")
+_r("ebitda_ttm", "currency", "ttm(ebitda)", "EBITDA, trailing twelve months")
+_r("free_cash_flow_ttm", "currency", "ttm(free_cash_flow)", "Free cash flow, trailing twelve months")
+_r("eps_ttm", "per_share", "ttm(eps)", "EPS, trailing twelve months (the sum of each period's EPS)")
+_r("roe_ttm", "pct", "100 * ttm(net_profit) / total_equity", "Return on equity on trailing-twelve-month profit")
+_r("roa_ttm", "pct", "100 * ttm(net_profit) / total_assets", "Return on assets on trailing-twelve-month profit")
+_r("roce_ttm", "pct", "100 * ttm(ebit) / (total_assets - current_liabilities)",
+   "Return on capital employed on trailing-twelve-month EBIT")
+_r("net_profit_margin_ttm", "pct", "100 * ttm(net_profit) / ttm(top_line)",
+   "Net profit margin, trailing twelve months")
+_r("ebitda_margin_ttm", "pct", "100 * ttm(ebitda) / ttm(revenue)", "EBITDA margin, trailing twelve months")
+_r("interest_coverage_ttm", "x", "ttm(ebit) / ttm(finance_costs)",
+   "Interest coverage (EBIT / finance costs), trailing twelve months")
+_r("pe_ttm", "x", "share_price / eps_ttm", "Price / trailing-twelve-month earnings",
+   requires_positive=("eps_ttm",))
+_r("ev_ebitda_ttm", "x", "enterprise_value / ebitda_ttm", "EV / trailing-twelve-month EBITDA",
+   requires_positive=("ebitda_ttm",))
+_r("dividend_yield_ttm", "pct", "100 * abs(ttm(dividends)) / shares_outstanding / share_price",
+   "Dividend yield on trailing-twelve-month dividends")
 _r("graham_number", "per_share", "sqrt(22.5 * eps * book_value_per_share)",
    "Graham number (22.5 = 15 x 1.5, the classic P/E and P/B ceilings)",
    requires_positive=("eps", "book_value_per_share"))
