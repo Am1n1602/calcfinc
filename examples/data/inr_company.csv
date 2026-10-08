@@ -1,0 +1,7 @@
+entity,metric,period,value,basis
+Bharat Ltd,revenue,FY2026,1000,consolidated
+Bharat Ltd,net_profit,FY2026,100,consolidated
+Bharat Ltd,total_equity,FY2026,500,consolidated
+Bharat Ltd,revenue,FY2026,700,standalone
+Bharat Ltd,net_profit,FY2026,90,standalone
+Bharat Ltd,total_equity,FY2026,400,standalone

@@ -1,0 +1,11 @@
+metric,2026-01,2026-02,2026-03
+revenue,500,550,660
+pbt_before_exceptional,80,70,90
+depreciation,10,10,10
+finance_costs,5,5,5
+other_income,0,0,0
+principal_repayment,40,40,40
+interest_paid,5,5,5
+total_equity,1000,1000,1100
+borrowings_noncurrent,400,400,400
+cash_and_equivalents,100,100,100

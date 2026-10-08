@@ -1,0 +1,7 @@
+entity,metric,period,value,currency
+UsCo,revenue,FY2026,1000,USD
+UsCo,net_profit,FY2026,100,USD
+UsCo,total_equity,FY2026,500,USD
+InCo,revenue,FY2026,80000,INR
+InCo,net_profit,FY2026,12000,INR
+InCo,total_equity,FY2026,40000,INR

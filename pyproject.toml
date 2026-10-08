@@ -24,10 +24,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-pandas = []   # placeholder: Phase 2 loaders
+pandas = ["pandas>=2"]   # only needed to build DataFrames; the loader itself never imports pandas
 mcp = []      # placeholder: Phase 4 MCP server
 adapters = [] # placeholder: Phase 3 source adapters
-dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "pandas>=2"]
 
 [tool.hatch.version]
 path = "src/calcfinc/__init__.py"
@@ -39,7 +39,7 @@ packages = ["src/calcfinc"]
 testpaths = ["tests"]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 src = ["src", "tests"]
 
 [tool.ruff.lint]
