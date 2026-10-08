@@ -80,6 +80,8 @@ def _exact(expr: str, get):
             return Fraction(ast.get_source_segment(expr, n))
         if isinstance(n, ast.BinOp):
             return _bin(n.op, ev(n.left), ev(n.right))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "abs":
+            return abs(ev(n.args[0]))
         if isinstance(n, ast.UnaryOp):
             return -ev(n.operand)
         if isinstance(n, (ast.Name, ast.Attribute)):
@@ -110,7 +112,10 @@ class TestAgreesWithExactArithmetic(unittest.TestCase):
 
     def test_every_plain_arithmetic_formula(self):
         rnd = random.Random(20261008)
-        raw = {name: D(rnd.randint(10_000, 99_999_999)).scaleb(-rnd.randint(0, 4)) for name in metrics.REGISTRY}
+        # core vocabulary only: whether the optional Indian adapter was registered earlier in this
+        # process must not change the draw or the set of formulas checked
+        core = [n for n in metrics.REGISTRY if not n.startswith("india.")]
+        raw = {name: D(rnd.randint(10_000, 99_999_999)).scaleb(-rnd.randint(0, 4)) for name in core}
         ev = Evaluator(make_record(raw),
                        price=SharePrice(1, date(2026, 12, 31), "137.3719", "USD"))
         price = Fraction("137.3719")
@@ -127,7 +132,7 @@ class TestAgreesWithExactArithmetic(unittest.TestCase):
             return _exact(spec.formula, exact_value)
 
         for name, spec in ratios.FORMULAS.items():
-            if any(tok in spec.formula for tok in ("sqrt", "prior", "**")):
+            if name.startswith("india.") or any(tok in spec.formula for tok in ("sqrt", "prior", "**")):
                 continue
             got = ev.value(name).value
             self.assertIsNotNone(got, f"{name}: {ev.value(name).reason}")

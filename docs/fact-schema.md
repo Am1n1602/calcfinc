@@ -76,6 +76,12 @@ eng.get_ratio("Acme", "roe")
 - For your own storage, implement the protocols in `calcfinc.store.base` and pass them to
   `FinancialEngine(repos)`.
 
+## Indian reporting
+
+India-specific inputs and the `india.*` ratios (Schedule III and ICAI forms) are optional. Call
+`calcfinc.adapters.ind_as_xbrl.register()` once before loading data or asking for them. The
+choices behind each definition are in [regulatory-definitions.md](regulatory-definitions.md).
+
 ## Results
 
 Every call returns an `EngineResult`: `value` (a `Decimal` or `None`), `unit`, `currency`,

@@ -154,6 +154,99 @@ class TestRatios(unittest.TestCase):
             ratios.register_ratio(ratios.RatioSpec("typo_ratio", "x", "net_profit / totl_equity"))
 
 
+class TestBankDefinitions(unittest.TestCase):
+    """Bank ratios on the RBI forms: average earning assets, gross advances, provisions held."""
+
+    PRIOR = {"bank.earning_assets": 6000, "total_assets": 8000}
+    CUR = {"bank.interest_earned": 1000, "bank.interest_expended": 600,        # net interest income 400
+           "bank.earning_assets": 8000, "total_assets": 10000}
+
+    def _ev(self, cur, prior=None):
+        p = make_record(prior, start=date(2025, 1, 1), end=date(2025, 12, 31)) if prior else None
+        return Evaluator(make_record(cur), prior=p)
+
+    def test_nim_uses_average_interest_earning_assets(self):
+        out = self._ev(self.CUR, self.PRIOR).value("bank.net_interest_margin")
+        self.assertEqual(out.value.quantize(Q10), D("5.7142857143"))           # 400 / ((8000 + 6000) / 2)
+        self.assertEqual(out.notes, ())
+
+    def test_nim_without_a_prior_period_uses_period_end_and_says_so(self):
+        out = self._ev(self.CUR).value("bank.net_interest_margin")
+        self.assertEqual(out.value, 5)                                         # 400 / 8000
+        self.assertTrue(any("period-end interest-earning assets" in n for n in out.notes))
+
+    def test_nim_without_earning_assets_falls_back_to_total_assets_and_says_so(self):
+        cur = {k: v for k, v in self.CUR.items() if k != "bank.earning_assets"}
+        out = self._ev(cur).value("bank.net_interest_margin")
+        self.assertEqual(out.value, 4)                                         # 400 / 10000
+        self.assertTrue(any("understates" in n for n in out.notes))
+
+    def test_nim_on_average_total_assets(self):
+        out = self._ev(self.CUR, self.PRIOR).value("bank.net_interest_margin_avg_assets")
+        self.assertEqual(out.value.quantize(Q10), D("4.4444444444"))           # 400 / ((10000 + 8000) / 2)
+
+    def test_gross_npa_ratio_uses_gross_advances_when_reported(self):
+        rec = {"bank.gross_npa": 300, "bank.advances": 6000, "bank.gross_advances": 6400}
+        out = self._ev(rec).value("bank.gross_npa_to_advances")
+        self.assertEqual(out.value, D("4.6875"))                               # 300 / 6400
+        self.assertEqual(out.notes, ())
+
+    def test_gross_npa_ratio_falls_back_to_balance_sheet_advances_and_says_so(self):
+        out = self._ev({"bank.gross_npa": 300, "bank.advances": 6000}).value("bank.gross_npa_to_advances")
+        self.assertEqual(out.value, 5)
+        self.assertTrue(any("gross advances not reported" in n for n in out.notes))
+
+    def test_net_npa_ratio_is_on_net_advances(self):
+        out = self._ev({"bank.net_npa": 120, "bank.advances": 6000}).value("bank.net_npa_to_advances")
+        self.assertEqual(out.value, 2)
+
+    def test_provision_coverage_uses_provisions_held_when_reported(self):
+        rec = {"bank.gross_npa": 300, "bank.net_npa": 120, "bank.npa_provisions": 190}
+        out = self._ev(rec).value("bank.provision_coverage")
+        self.assertEqual(out.value.quantize(Q10), D("63.3333333333"))          # 190 / 300, not (300 - 120) / 300
+        self.assertEqual(out.notes, ())
+
+    def test_provision_coverage_proxy_is_labelled_as_an_estimate(self):
+        out = self._ev({"bank.gross_npa": 300, "bank.net_npa": 120}).value("bank.provision_coverage")
+        self.assertEqual(out.value, 60)
+        self.assertTrue(any("may overstate" in n for n in out.notes))
+
+
+class TestOutflowSignConvention(unittest.TestCase):
+    """Cash-flow sources disagree on the sign of dividends and capex (some report outflows as
+    negatives). The ratios must give the same answer either way."""
+
+    def test_payout_and_retention_ignore_the_sign_of_dividends(self):
+        for dividends in (45, -45):
+            with self.subTest(dividends=dividends):
+                rec = {"net_profit": 150, "dividends": dividends, "total_equity": 600}
+                self.assertEqual(val(rec, "payout_ratio").value, 30)           # 45 / 150
+                self.assertEqual(val(rec, "retention_ratio").value, 70)
+                self.assertEqual(val(rec, "sustainable_growth").value, D("17.5"))   # ROE 25% x 70%
+
+    def test_dividend_yield_ignores_the_sign_of_dividends(self):
+        from calcfinc import SharePrice
+        for dividends in (40, -40):
+            with self.subTest(dividends=dividends):
+                ev = Evaluator(make_record({"dividends": dividends, "shares_outstanding": 10}),
+                               price=SharePrice(1, date(2026, 12, 31), 200, "USD"))
+                self.assertEqual(ev.value("dividend_yield").value, 2)          # (40 / 10) / 200
+
+    def test_capex_and_free_cash_flow_ignore_the_sign_of_each_component(self):
+        for ppe, intangibles in ((30, 5), (-30, -5), (-30, 5), (30, -5)):
+            with self.subTest(ppe=ppe, intangibles=intangibles):
+                rec = {"operating_cash_flow": 100, "capex_ppe": ppe, "capex_intangibles": intangibles,
+                       "revenue": 1000, "depreciation": 35}
+                self.assertEqual(val(rec, "capex").value, 35)
+                self.assertEqual(val(rec, "free_cash_flow").value, 65)
+                self.assertEqual(val(rec, "capex_to_depreciation").value, 1)    # 35 / 35
+                self.assertEqual(val(rec, "capex_to_revenue").value, D("3.5"))
+
+    def test_single_component_fallbacks_also_ignore_sign(self):
+        self.assertEqual(val({"capex_ppe": -30}, "capex").value, 30)
+        self.assertEqual(val({"capex_intangibles": -5}, "capex").value, 5)
+
+
 class TestWorkingCapitalEfficiency(unittest.TestCase):
     R = {"revenue": 1000, "cost_of_revenue": 600, "gross_profit": 400, "trade_receivables": 100,
          "inventory": 80, "trade_payables": 60, "current_assets": 400, "current_liabilities": 200}

@@ -147,9 +147,10 @@ _r("total_debt", "currency",
    "borrowings_current + borrowings_noncurrent + debt_securities + deposits_debt", "Total debt",
    optional=("borrowings_current", "borrowings_noncurrent", "debt_securities", "deposits_debt"))
 _r("net_debt", "currency", "total_debt - cash_and_equivalents", "Net debt")
-_r("capex", "currency", "capex_ppe + capex_intangibles", "Capital expenditure",
-   fallbacks=(("capex_ppe", "capex_intangibles not reported; capex is PP&E only"),
-              ("capex_intangibles", "capex_ppe not reported; capex is intangibles only")))
+_r("capex", "currency", "abs(capex_ppe) + abs(capex_intangibles)",
+   "Capital expenditure (a positive amount, whichever sign the source uses)",
+   fallbacks=(("abs(capex_ppe)", "capex_intangibles not reported; capex is PP&E only"),
+              ("abs(capex_intangibles)", "capex_ppe not reported; capex is intangibles only")))
 _r("free_cash_flow", "currency", "operating_cash_flow - capex", "Free cash flow")
 _r("working_capital", "currency", "current_assets - current_liabilities", "Working capital")
 _r("nopat", "currency", "ebit * (1 - tax_expense / pbt)",
@@ -193,7 +194,7 @@ _r("ev_sales", "x", "enterprise_value / top_line", "EV / sales", requires_positi
 _r("price_to_sales", "x", "market_cap / top_line", "Price / sales",
    requires_positive=("top_line",), aliases=("p/s", "ps"))
 _r("earnings_yield", "pct", "100 * eps / share_price", "Earnings yield")
-_r("dividend_yield", "pct", "100 * (dividends / shares_outstanding) / share_price",
+_r("dividend_yield", "pct", "100 * (abs(dividends) / shares_outstanding) / share_price",
    "Dividend yield", aliases=("div_yield",))
 _r("fcf_yield", "pct", "100 * free_cash_flow / market_cap", "Free cash flow yield",
    requires_positive=("market_cap",))
@@ -208,7 +209,7 @@ _r("roa", "pct", "100 * net_profit / total_assets", "Return on assets (period-en
 _r("roe_avg", "pct", "100 * net_profit / ((total_equity + prior(total_equity)) / 2)",
    "Return on average equity")
 _r("roa_avg", "pct", "100 * net_profit / ((total_assets + prior(total_assets)) / 2)",
-   "Return on average assets")
+   "Return on average assets (the basis banking regulators use for banks)")
 _r("roce", "pct", "100 * ebit / (total_assets - current_liabilities)",
    "Return on capital employed", aliases=("return_on_capital_employed", "roce_pct"))
 _r("roic", "pct", "100 * nopat / invested_capital", "Return on invested capital",
@@ -228,7 +229,7 @@ _r("operating_leverage", "x",
    "(ebit - prior(ebit)) * prior(top_line) / (prior(ebit) * (top_line - prior(top_line)))",
    "Degree of operating leverage (% change in EBIT / % change in top line)",
    requires_positive=("prior(ebit)",))
-_r("payout_ratio", "pct", "100 * dividends / net_profit", "Dividend payout ratio")
+_r("payout_ratio", "pct", "100 * abs(dividends) / net_profit", "Dividend payout ratio")
 _r("retention_ratio", "pct", "100 - payout_ratio", "Earnings retention ratio")
 _r("sustainable_growth", "pct", "roe * retention_ratio / 100",
    "Sustainable growth rate (ROE x retention)")
@@ -284,24 +285,36 @@ _r("graham_number", "per_share", "sqrt(22.5 * eps * book_value_per_share)",
 # --------------------------------------------------------------------------- #
 # bank.*
 # --------------------------------------------------------------------------- #
-_r("bank.net_interest_margin", "pct", "100 * bank.net_interest_income / bank.earning_assets",
-   "Net interest margin (period-end earning assets)",
-   fallbacks=(("100 * bank.net_interest_income / total_assets",
+_r("bank.net_interest_margin", "pct",
+   "100 * bank.net_interest_income / ((bank.earning_assets + prior(bank.earning_assets)) / 2)",
+   "Net interest margin on average interest-earning assets",
+   fallbacks=(("100 * bank.net_interest_income / bank.earning_assets",
+               "no earlier comparable period; period-end interest-earning assets used instead of the average"),
+              ("100 * bank.net_interest_income / total_assets",
                "interest-earning assets not reported; total assets used as the denominator "
-               "(understates the margin)"),),
+               "(understates the margin)")),
    aliases=("nim", "net_interest_margin"))
+_r("bank.net_interest_margin_avg_assets", "pct",
+   "100 * bank.net_interest_income / ((total_assets + prior(total_assets)) / 2)",
+   "Net interest margin on average total assets (not annualised)")
 _r("bank.credit_cost", "pct", "100 * bank.provisions / bank.advances",
    "Credit cost (provisions / period-end advances)", aliases=("credit_cost",))
 _r("bank.cost_to_income", "pct", "100 * bank.operating_expenses / bank.operating_income",
    "Cost to income", requires_positive=("bank.operating_income",))
 _r("bank.loan_to_deposit", "pct", "100 * bank.advances / bank.deposits", "Loan to deposit")
 _r("bank.casa_ratio", "pct", "100 * bank.casa_deposits / bank.deposits", "CASA ratio")
-_r("bank.provision_coverage", "pct", "100 * (bank.gross_npa - bank.net_npa) / bank.gross_npa",
-   "Provision coverage (provisions held taken as gross NPA - net NPA)")
-_r("bank.gross_npa_to_advances", "pct", "100 * bank.gross_npa / bank.advances",
-   "Gross NPA / balance-sheet advances")
+_r("bank.provision_coverage", "pct", "100 * bank.npa_provisions / bank.gross_npa",
+   "Provision coverage (provisions held against NPAs / gross NPAs)",
+   fallbacks=(("100 * (bank.gross_npa - bank.net_npa) / bank.gross_npa",
+               "provisions against NPAs not reported; estimated as gross NPA - net NPA, which also counts "
+               "interest suspense and part payments and so may overstate coverage"),))
+_r("bank.gross_npa_to_advances", "pct", "100 * bank.gross_npa / bank.gross_advances",
+   "Gross NPA / gross advances",
+   fallbacks=(("100 * bank.gross_npa / bank.advances",
+               "gross advances not reported; balance-sheet advances used (overstates the ratio when "
+               "provisions are large)"),))
 _r("bank.net_npa_to_advances", "pct", "100 * bank.net_npa / bank.advances",
-   "Net NPA / balance-sheet advances")
+   "Net NPA / net (balance-sheet) advances")
 
 # --------------------------------------------------------------------------- #
 # insurance.*  (ratios on an earned-premium basis)
