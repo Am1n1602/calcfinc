@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from calcfinc.fact import Basis, FinancialFact
+from calcfinc.fact import Basis, FinancialFact, MappingConfidence
 from calcfinc.period import DEFAULT_WINDOWS, PeriodWindows, fiscal_year
 
 
@@ -23,7 +23,9 @@ class PeriodRecord:
     values: dict[str, Decimal] = field(default_factory=dict)
     currencies: dict[str, str] = field(default_factory=dict)      # metric -> ISO 4217
     sources: dict[str, int | None] = field(default_factory=dict)
-    review_flags: dict[str, str] = field(default_factory=dict)
+    review_flags: dict[str, str] = field(default_factory=dict)    # metric -> why a person should look
+    info_notes: dict[str, str] = field(default_factory=dict)      # metric -> how it was derived (not a doubt)
+    reported: dict[str, date | None] = field(default_factory=dict)   # metric -> reported_at of the value used
 
     # ---- access ----
     def get(self, metric: str, default: Any = None) -> Any:
@@ -74,7 +76,7 @@ class PeriodRecord:
 
 
 def _bucket() -> dict[str, Any]:
-    return {"values": {}, "currencies": {}, "sources": {}, "flags": {}}
+    return {"values": {}, "currencies": {}, "sources": {}, "flags": {}, "notes": {}, "reported": {}}
 
 
 def _put(bucket: dict[str, Any], f: FinancialFact) -> None:
@@ -83,12 +85,17 @@ def _put(bucket: dict[str, Any], f: FinancialFact) -> None:
     if f.value is not None:
         bucket["values"][f.metric] = f.value
         bucket["sources"][f.metric] = f.source_id
+        bucket["reported"][f.metric] = f.reported_at
+        bucket["flags"].pop(f.metric, None)          # a flag belongs to the value it was raised on
+        bucket["notes"].pop(f.metric, None)
         if f.currency is not None:
             bucket["currencies"][f.metric] = f.currency
         else:
             bucket["currencies"].pop(f.metric, None)
     if f.mapping_reason:
-        bucket["flags"][f.metric] = f.mapping_reason
+        # A derived or alternate-tag value says how it was made; any other reason is a doubt.
+        informational = f.mapping_confidence in (MappingConfidence.DERIVED, MappingConfidence.ALTERNATE_TAG)
+        bucket["notes" if informational else "flags"][f.metric] = f.mapping_reason
 
 
 def build_period_records(repos: Any, entity_id: int, basis: Basis | str, *,
@@ -114,23 +121,26 @@ def build_period_records(repos: Any, entity_id: int, basis: Basis | str, *,
     for (ps, pe), d in durations.items():
         fy, q, annual = d["meta"]
         values, currencies = dict(d["values"]), dict(d["currencies"])
-        sources, flags = dict(d["sources"]), dict(d["flags"])
+        sources, flags, notes, reported = dict(d["sources"]), dict(d["flags"]), dict(d["notes"]), dict(d["reported"])
         snap = instants.get(pe)
         if snap is not None:
             used_instant_ends.add(pe)
             for m, v in snap["values"].items():
                 values.setdefault(m, v)
                 sources.setdefault(m, snap["sources"].get(m))
+                reported.setdefault(m, snap["reported"].get(m))
                 if m in snap["currencies"]:
                     currencies.setdefault(m, snap["currencies"][m])
             for m, r in snap["flags"].items():
                 flags.setdefault(m, r)
+            for m, r in snap["notes"].items():
+                notes.setdefault(m, r)
         days = (pe - ps).days if (ps is not None and pe is not None) else None
         ptype = "year" if annual else windows.classify(days)
         records.append(PeriodRecord(
             basis=basis.value, period_start=ps, period_end=pe, financial_year=fy, quarter=q,
             is_annual=annual, period_type=ptype, values=values, currencies=currencies,
-            sources=sources, review_flags=flags))
+            sources=sources, review_flags=flags, info_notes=notes, reported=reported))
 
     # balance-sheet dates with no matching duration record stay as snapshot-only records
     for pe, snap in instants.items():
@@ -141,7 +151,7 @@ def build_period_records(repos: Any, entity_id: int, basis: Basis | str, *,
             financial_year=fiscal_year(pe, fiscal_year_end_month) if pe else None,
             quarter=None, is_annual=False, period_type=None, values=dict(snap["values"]),
             currencies=dict(snap["currencies"]), sources=dict(snap["sources"]),
-            review_flags=dict(snap["flags"])))
+            review_flags=dict(snap["flags"]), info_notes=dict(snap["notes"]), reported=dict(snap["reported"])))
 
     records.sort(key=PeriodRecord.sort_key)
     return records

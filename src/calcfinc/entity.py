@@ -17,9 +17,12 @@ class Entity:
     aliases: tuple[str, ...] = ()
     currency: str | None = None                # default currency for facts that omit one
     fiscal_year_end_month: int = 12
-    id: int | None = None
+    sector: str | None = None                  # 'bank' holds back ratios that do not apply to banks;
+    id: int | None = None                      # None = infer from the facts (see engine), any other text = declared
 
     def __post_init__(self) -> None:
+        if self.sector is not None:
+            object.__setattr__(self, "sector", self.sector.strip().lower() or None)
         if not self.name or not self.kind:
             raise ValueError("Entity requires a name and a kind")
         if not 1 <= self.fiscal_year_end_month <= 12:

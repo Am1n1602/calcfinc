@@ -12,6 +12,7 @@ evaluated; the note is added to the result so a substitution is never silent.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from calcfinc.formula import WINDOWED, CalcError, names_in
@@ -68,6 +69,16 @@ class RatioSpec:
 
 FORMULAS: dict[str, RatioSpec] = {}
 ALIASES: dict[str, str] = {}
+NOT_FOR: dict[str, dict[str, str]] = {}      # ratio -> sector -> why it does not apply there
+
+
+def restrict(names: Iterable[str], sector: str, why: str) -> None:
+    """Mark ratios as meaningless for a sector. For that sector they return None with `why`, and so
+    does every ratio built on them (a ratio with a fallback formula still tries the fallback)."""
+    for n in names:
+        if n not in FORMULAS:
+            raise ValueError(f"cannot restrict {n!r}: not a registered ratio")
+        NOT_FOR.setdefault(n, {})[sector] = why
 
 
 def split_windowed(name: str) -> tuple[str | None, str]:
@@ -346,10 +357,14 @@ _r("bank.net_interest_margin_avg_assets", "pct",
    "100 * bank.net_interest_income / ((total_assets + prior(total_assets)) / 2)",
    "Net interest margin on average total assets (not annualised)")
 _r("bank.credit_cost", "pct", "100 * bank.provisions / bank.advances",
-   "Credit cost (provisions / period-end advances)", aliases=("credit_cost",))
+   "Credit cost (provisions / period-end advances)", aliases=("credit_cost",),
+   fallbacks=(("100 * bank.provisions / bank.gross_advances",
+               "net advances not reported; gross advances used (understates the ratio slightly)"),))
 _r("bank.cost_to_income", "pct", "100 * bank.operating_expenses / bank.operating_income",
    "Cost to income", requires_positive=("bank.operating_income",))
-_r("bank.loan_to_deposit", "pct", "100 * bank.advances / bank.deposits", "Loan to deposit")
+_r("bank.loan_to_deposit", "pct", "100 * bank.advances / bank.deposits", "Loan to deposit",
+   fallbacks=(("100 * bank.gross_advances / bank.deposits",
+               "net advances not reported; gross advances used (overstates the ratio slightly)"),))
 _r("bank.casa_ratio", "pct", "100 * bank.casa_deposits / bank.deposits", "CASA ratio")
 _r("bank.provision_coverage", "pct", "100 * bank.npa_provisions / bank.gross_npa",
    "Provision coverage (provisions held against NPAs / gross NPAs)",
@@ -379,3 +394,22 @@ _r("insurance.investment_income_ratio", "pct",
    "Net investment income / earned premium")
 _r("insurance.operating_ratio", "pct",
    "insurance.combined_ratio - insurance.investment_income_ratio", "Operating ratio")
+
+# --------------------------------------------------------------------------- #
+# ratios that do not describe a bank (see bank.* above, or net_profit based ones, instead)
+# --------------------------------------------------------------------------- #
+BANK_WHY = {
+    "interest": "interest is a bank's operating cost, so profit before interest is not an operating result",
+    "debt": "a bank is funded by deposits and borrowing is part of its business, so debt ratios say little "
+            "about its leverage (see equity_multiplier and the capital ratios)",
+    "current": "a bank's balance sheet is not split into current and non-current",
+    "trade": "a bank has no inventory, trade receivables or cost of goods",
+    "cash_flow": "a bank's operating cash flow is dominated by deposit and loan movements",
+}
+restrict(("ebit", "ebitda", "operating_ebit", "interest_coverage"), "bank", BANK_WHY["interest"])
+restrict(("total_debt",), "bank", BANK_WHY["debt"])
+restrict(("working_capital", "current_ratio", "quick_ratio", "cash_ratio"), "bank", BANK_WHY["current"])
+restrict(("gross_margin", "inventory_turnover", "receivables_turnover", "payables_turnover",
+          "dso", "dio", "dpo"), "bank", BANK_WHY["trade"])
+restrict(("free_cash_flow", "ocf_margin", "cash_conversion", "capex_to_revenue", "capex_to_depreciation"),
+         "bank", BANK_WHY["cash_flow"])

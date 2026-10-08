@@ -74,7 +74,7 @@ def read_rows(text: str, *, layout: str = "auto", fiscal_year_end_month: int = 1
 def load_csv(repos: Any, path: str | Path, *, layout: str = "auto", entity: str | None = None,
              currency: str | None = None, basis: Basis | str = "consolidated",
              fiscal_year_end_month: int = 12, windows: PeriodWindows = DEFAULT_WINDOWS,
-             entity_kind: str = "company", delimiter: str = ",") -> LoadReport:
+             entity_kind: str = "company", delimiter: str = ",", sector: str | None = None) -> LoadReport:
     p = Path(path)
     data = p.read_bytes()
     rows = read_rows(data.decode("utf-8-sig"), layout=layout, fiscal_year_end_month=fiscal_year_end_month,
@@ -83,4 +83,4 @@ def load_csv(repos: Any, path: str | Path, *, layout: str = "auto", entity: str 
                     content_hash=hashlib.sha256(data).hexdigest())
     return load_records(repos, rows, entity=entity, currency=currency, basis=basis,
                         fiscal_year_end_month=fiscal_year_end_month, windows=windows, source=source,
-                        entity_kind=entity_kind)
+                        entity_kind=entity_kind, sector=sector)

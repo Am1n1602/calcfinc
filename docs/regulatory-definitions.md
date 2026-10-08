@@ -58,6 +58,31 @@ IRDAI (insurance) was not in the requested set and is not covered.
 | Gross NPA ratio | Gross NPAs / gross advances, falling back to balance-sheet advances with a note. Net NPA ratio is on net (balance-sheet) advances. |
 | Provision coverage | Provisions held against NPAs / gross NPAs, falling back to (gross - net NPA) with a note that it may overstate. |
 
+## Ratios held back for banks
+
+Several generic ratios describe an operating business and mislead for a bank (a large US bank
+showed interest cover 1.76, EBIT margin 39.8% and debt/equity 0.18, none of which means what it
+means for a manufacturer). For an entity whose sector is `bank` they return None with the reason,
+and so does everything built on them.
+
+An entity is a bank if it was declared one (`Entity.sector`, or `sector=` when loading), or, when no
+sector is declared, if it reports `bank.interest_earned` and `bank.interest_expended` together with
+`bank.deposits`, `bank.advances` or `bank.gross_advances`. Interest lines alone, or deposits and
+loans alone, are not enough (an insurer files deposits and mortgage loans). Declaring any other
+sector (for example `"corporate"`) switches the inference off. Insurers are not yet handled this way.
+
+| Held back | Why |
+|---|---|
+| `ebit`, `ebitda`, `operating_ebit`, `interest_coverage` and what rests on them (margins, ROCE, ROIC, `india.roce`, `india.dscr_sebi`, TTM forms) | Interest is a bank's operating cost |
+| `total_debt` and what rests on it (debt/equity, net debt, enterprise value, `india.capital_employed`) | Deposits are the funding; borrowing is part of the business. `ev_ebitda` still has its labelled market cap / PPOP fallback |
+| `working_capital`, current, quick and cash ratios, `india.quick_ratio`, `india.net_capital_turnover` | No current / non-current split |
+| gross margin, inventory / receivable / payable turnovers and days, `india.*` turnovers and days | No inventory, trade receivables or cost of goods |
+| free cash flow, operating cash flow margin, cash conversion, capex ratios | Cash flow is dominated by deposit and loan movements |
+| `india.roa` | Adds back interest; use `roa_avg` or the reported ROA |
+
+Not held back: ROE, ROA, `roa_avg`, equity multiplier, DuPont, payout, per-share and valuation
+ratios, and everything under `bank.*`. `calculate()` still evaluates any formula by hand.
+
 ## Indian counterparts (`india.*`, registered by `calcfinc.adapters.ind_as_xbrl.register()`)
 
 Added only where the Indian form differs from the generic one above. Ratios where Indian practice

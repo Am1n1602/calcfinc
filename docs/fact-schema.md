@@ -31,7 +31,7 @@ computes is derived from facts, and every result lists the facts it used.
 | `basis` | `consolidated` (default) or `standalone`. |
 | `reported_at` | ISO date the figure was published. Optional. |
 | `source` | Free text naming where the figure came from (a filing, a report). Optional; a CSV file is also recorded automatically by its content hash. |
-| `mapping_reason` | Why a value is missing or was mapped unusually. Shown as a review limitation. |
+| `mapping_reason` | Why a value is missing or was mapped unusually. On a `derived` or `alternate_tag` fact it is a note on how the value was made; on any other fact it is a review flag ("source record flagged for review"). Both appear in a result's `limitations`. |
 
 **Inferred unless you override.** `statement_type` and whether a metric is a balance-sheet
 instant come from the metric registry. `financial_year`, `quarter` and `is_annual` come from the

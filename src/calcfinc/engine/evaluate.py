@@ -8,13 +8,14 @@ declares explicitly, count as 0 and say so).
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 from decimal import Decimal
 
 from calcfinc.engine.records import PeriodRecord
 from calcfinc.fact import SharePrice
 from calcfinc.formula import CalcError, evaluate, names_in
 from calcfinc.num import ZERO, add, to_text
-from calcfinc.registry.ratios import FORMULAS, PERIOD_DAYS, PRICE, RatioSpec
+from calcfinc.registry.ratios import FORMULAS, NOT_FOR, PERIOD_DAYS, PRICE, RatioSpec
 
 _CURRENCY_UNITS = frozenset({"currency", "per_share"})
 
@@ -28,6 +29,7 @@ class FactRef:
     period: str | None
     source_id: int | None
     currency: str | None = None
+    reported_at: date | None = None         # when the value used was first reported (the latest version wins)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,11 +52,13 @@ class Evaluator:
 
     def __init__(self, rec: PeriodRecord, *, prior: PeriodRecord | None = None,
                  price: SharePrice | None = None, price_reason: str | None = None,
-                 window: list[PeriodRecord] | None = None, window_reason: str | None = None) -> None:
+                 window: list[PeriodRecord] | None = None, window_reason: str | None = None,
+                 sector: str | None = None) -> None:
         self.rec = rec
         self.price = price
+        self.sector = sector                   # ratios restricted for this sector return None
         self._price_reason = price_reason
-        self._prior = Evaluator(prior) if prior is not None else None
+        self._prior = Evaluator(prior, sector=sector) if prior is not None else None
         self._window = window                  # the adjacent periods making up a year, ending at `rec`
         self._window_reason = window_reason
         self._memo: dict[str, Outcome] = {}
@@ -101,7 +105,7 @@ class Evaluator:
         notes: list[str] = []
         currencies: set[str] = set()
         for r in self._window:
-            out = self.value(inner) if r is self.rec else Evaluator(r).value(inner)
+            out = self.value(inner) if r is self.rec else Evaluator(r, sector=self.sector).value(inner)
             if out.value is None:
                 return _fail(f"{inner}: {out.reason} [{r.label}]")
             total = add(total, out.value)
@@ -116,13 +120,16 @@ class Evaluator:
         if v is None:
             return _fail(f"{name} not reported")
         cur = self.rec.currencies.get(name)
-        ref = FactRef(name, v, self.rec.label, self.rec.sources.get(name), cur)
+        ref = FactRef(name, v, self.rec.label, self.rec.sources.get(name), cur, self.rec.reported.get(name))
         return Outcome(v, leaves=(ref,), currencies=frozenset({cur}) if cur else frozenset())
 
     # ---- formulas ----
     def _spec(self, spec: RatioSpec) -> Outcome:
         if spec.name in self._stack:
             return _fail(f"{spec.name}: circular definition")
+        why = NOT_FOR.get(spec.name, {}).get(self.sector or "")
+        if why is not None:
+            return _fail(f"{spec.name} does not apply to a {self.sector}: {why}")
         self._stack.append(spec.name)
         try:
             first_reason: str | None = None

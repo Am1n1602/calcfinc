@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from calcfinc.engine import decompose, growth
-from calcfinc.engine.check import ABS_TOL, REL_TOL, CheckResult, check_values
+from calcfinc.engine.check import ABS_TOL, REL_TOL, CheckResult, check_values, quarters_add_up
 from calcfinc.engine.evaluate import Evaluator, FactRef, Outcome
 from calcfinc.engine.records import PeriodRecord, build_period_records
 from calcfinc.engine.segments import SegmentEngine, SegmentResult
@@ -106,8 +106,30 @@ def _parse_period(period: Any) -> tuple[Any, ...]:
 
 
 def _flag_limits(rec: PeriodRecord, used: Sequence[str]) -> tuple[str, ...]:
-    return tuple(f"{m}: source record flagged for review ({rec.review_flags[m]})"
-                 for m in used if m in rec.review_flags)
+    """Review flags (a doubt about the source) and notes (how a value was derived) for the inputs used."""
+    return (tuple(f"{m}: source record flagged for review ({rec.review_flags[m]})"
+                  for m in used if m in rec.review_flags)
+            + tuple(f"{m}: {rec.info_notes[m]}" for m in used if m in rec.info_notes))
+
+
+VINTAGE_DAYS = 120       # inputs of one period first reported further apart than this were not filed together
+
+
+def _vintage_note(leaves: Sequence[FactRef]) -> tuple[str, ...]:
+    """Inputs for the same period that were first reported in different filings -- usually a
+    restatement that touched some of them. The latest figure is used for each; they may not agree."""
+    by_period: dict[str | None, list[tuple[date, str]]] = {}
+    for leaf in leaves:
+        if leaf.reported_at is not None:
+            by_period.setdefault(leaf.period, []).append((leaf.reported_at, leaf.metric))
+    notes = []
+    for period, refs in by_period.items():
+        (d0, m0), (d1, m1) = min(refs), max(refs)
+        if (d1 - d0).days > VINTAGE_DAYS:
+            notes.append(f"inputs for {period} come from different filings: {m0} reported {d0}, {m1} reported "
+                         f"{d1}; a restatement may separate them (check_periods() tests whether the "
+                         "quarters add up to the year)")
+    return tuple(notes)
 
 
 def _with_limit(res: EngineResult, msg: str) -> EngineResult:
@@ -141,10 +163,12 @@ class FinancialEngine:
         self._repos = repos
         self._windows = windows
         self._cache: dict[tuple[int, str], list[PeriodRecord]] = {}
+        self._inferred: dict[int, str | None] = {}         # id(records) -> sector inferred from the facts
         self._segments = SegmentEngine(repos)
 
     def refresh(self) -> None:
         self._cache.clear()
+        self._inferred.clear()
 
     @property
     def repos(self) -> Any:
@@ -220,6 +244,8 @@ class FinancialEngine:
         if not candidates:
             return None
         if spec[0] == "kind":
+            # a date that only carries a balance (an SEC cover-page share count) is not a reporting period
+            candidates = [r for r in candidates if not r.is_point_in_time_only] or candidates
             if spec[1] == "latest_annual":
                 candidates = [r for r in candidates if r.is_annual]
             elif spec[1] == "latest_quarter":
@@ -283,10 +309,22 @@ class FinancialEngine:
                               f"for {ent.name}")
         window, window_reason = self._window(records, rec)
         return Evaluator(rec, prior=self._prior(records, rec), price=price, price_reason=reason,
-                         window=window, window_reason=window_reason)
+                         window=window, window_reason=window_reason, sector=self._sector(ent, records))
+
+    def _sector(self, ent: Entity, records: list[PeriodRecord]) -> str | None:
+        """The declared sector, else 'bank' when the entity reports interest earned and expended
+        (the defining lines of a bank's income statement) and deposits or loans."""
+        if ent.sector is not None:
+            return ent.sector
+        if id(records) not in self._inferred:
+            has = {m for r in records for m in r.values}
+            self._inferred[id(records)] = (
+                "bank" if {"bank.interest_earned", "bank.interest_expended"} <= has
+                and has & {"bank.deposits", "bank.advances", "bank.gross_advances"} else None)
+        return self._inferred[id(records)]
 
     def _formula_result(self, kind: str, ent: Entity, spec: RatioSpec, basis: Basis | str,
-                        period: Any) -> EngineResult:
+                        period: Any, fallback: bool = False) -> EngineResult:
         records = self._records(ent, basis)
         price_dep = ratios.needs_price(spec.name)
         ttm = ratios.uses_ttm(spec.name)
@@ -302,11 +340,18 @@ class FinancialEngine:
             return cache[id(r)]
 
         base = (lambda r: r.is_annual) if price_dep and not ttm else (lambda r: True)
-        rec = self._select(records, period, lambda r: base(r) and run(r)[1].value is not None)
-        if rec is None:
-            probe = self._select(records, period, base)
+        # The period asked for is the one answered; an older period is used only on request.
+        rec = self._select(records, period, base)
+        stale = ""
+        if rec is not None and run(rec)[1].value is None and fallback and _parse_period(period)[0] == "kind":
+            newest = rec
+            rec = self._select(records, period, lambda r: base(r) and run(r)[1].value is not None)
+            if rec is not None:
+                stale = (f"{spec.name} could not be computed for {newest.label} ({run(newest)[1].reason}); "
+                         f"this is the newest period where it can: {rec.label}")
+        if rec is None or run(rec)[1].value is None:
             why = (f"no {'annual ' if price_dep and not ttm else ''}period for {ent.name} ({basis}, period={period})"
-                   if probe is None else f"{run(probe)[1].reason} [{probe.label}]")
+                   if rec is None else f"{run(rec)[1].reason} [{rec.label}]")
             return EngineResult(label, spec.name, None, unit=spec.unit, entity=ent.name,
                                 basis=Basis(basis).value, formula=spec.formula,
                                 definition_version=spec.version, limitations=(why,))
@@ -321,8 +366,9 @@ class FinancialEngine:
             label, spec.name, out.value, unit=cur if (spec.unit == "currency" and cur) else spec.unit,
             entity=ent.name, basis=rec.basis, period=rec.label, formula=out.formula or spec.formula,
             inputs=out.leaves, components=comps, currency=cur, definition_version=spec.version,
-            limitations=out.notes + (() if ttm else _flow_stock_note(rec, spec.name, out.leaves))
-            + _flag_limits(rec, used))
+            limitations=((stale,) if stale else ()) + out.notes
+            + (() if ttm else _flow_stock_note(rec, spec.name, out.leaves)) + _flag_limits(rec, used)
+            + _vintage_note(out.leaves))
 
     def _value_in(self, ent: Entity, records: list[PeriodRecord], rec: PeriodRecord,
                   name: str) -> Decimal | None:
@@ -337,12 +383,15 @@ class FinancialEngine:
     # API
     # ------------------------------------------------------------------ #
     def get_metric(self, entity: str | Entity, metric: str, *, basis: Basis | str = "consolidated",
-                   period: Any = "latest") -> EngineResult:
+                   period: Any = "latest", fallback: bool = False) -> EngineResult:
+        """A reported metric, or a derived quantity. For a derived one, 'latest*' means the newest
+        period of that kind; with `fallback=True` it is the newest where the inputs exist (the
+        result says which). A reported metric is the latest period that reports it."""
         ent = self._entity(entity)
         name = metric.strip()
         spec = ratios.get_spec(name)
         if spec is not None:
-            return self._formula_result("metric", ent, spec, basis, period)
+            return self._formula_result("metric", ent, spec, basis, period, fallback)
         records = self._records(ent, basis)
         rec = self._select(records, period, lambda r: r.get(name) is not None)
         if rec is None:
@@ -354,20 +403,24 @@ class FinancialEngine:
         unit = cur if (reg is None or reg.kind == "currency") and cur else (reg.kind if reg else None)
         return EngineResult(
             "metric", name, value, unit=unit, entity=ent.name, basis=rec.basis, period=rec.label,
-            inputs=(FactRef(name, value, rec.label, rec.sources.get(name), cur),), currency=cur,
+            inputs=(FactRef(name, value, rec.label, rec.sources.get(name), cur, rec.reported.get(name)),),
+            currency=cur,
             limitations=_flag_limits(rec, [name]))
 
     def get_ratio(self, entity: str | Entity, ratio: str, *, basis: Basis | str = "consolidated",
-                  period: Any = "latest") -> EngineResult:
+                  period: Any = "latest", fallback: bool = False) -> EngineResult:
+        """One ratio. 'latest*' is the newest period of that kind: if its inputs are missing the
+        result is None with the reason. `fallback=True` uses the newest period where it can be
+        computed instead, and says so in `limitations`."""
         ent = self._entity(entity)
         spec = ratios.get_spec(ratio)
         if spec is None:
             return EngineResult("ratio", ratio, None, entity=ent.name, basis=Basis(basis).value,
                                 limitations=(f"unknown ratio {ratio!r}; known: {', '.join(ratios.known())}",))
-        return self._formula_result("ratio", ent, spec, basis, period)
+        return self._formula_result("ratio", ent, spec, basis, period, fallback)
 
     def get_valuation(self, entity: str | Entity, kind: str, *, basis: Basis | str = "consolidated",
-                      period: Any = "latest_annual") -> EngineResult:
+                      period: Any = "latest_annual", fallback: bool = False) -> EngineResult:
         """P/E, P/B, EV/EBITDA, market cap, yields... anything priced at the fiscal year end."""
         ent = self._entity(entity)
         spec = ratios.get_spec(kind)
@@ -375,7 +428,7 @@ class FinancialEngine:
             return EngineResult("valuation", kind, None, entity=ent.name, basis=Basis(basis).value,
                                 limitations=(f"unknown valuation metric {kind!r}; known: "
                                              f"{', '.join(ratios.valuation_names())}",))
-        return self._formula_result("valuation", ent, spec, basis, period)
+        return self._formula_result("valuation", ent, spec, basis, period, fallback)
 
     def _series(self, ent: Entity, records: list[PeriodRecord], metric: str,
                 *, only: str) -> list[tuple[PeriodRecord, Decimal]]:
@@ -590,6 +643,24 @@ class FinancialEngine:
         a, r_ = to_decimal(abs_tol), to_decimal(rel_tol)
         return [CheckResult(ent.name, rec.basis, rec.label, check_values(rec.values, a, r_))
                 for rec in records]
+
+    def check_periods(self, entity: str | Entity, *, basis: Basis | str = "consolidated",
+                      abs_tol: Num = ABS_TOL, rel_tol: Num = REL_TOL) -> list[CheckResult]:
+        """For each year that has four single quarters: do the quarters add up to the year, for
+        every amount (not per-share figure) that the year and all four quarters report? A mismatch
+        usually means the year and the quarters come from different restatement vintages."""
+        ent = self._entity(entity)
+        records = self._records(ent, basis)
+        a, r_ = to_decimal(abs_tol), to_decimal(rel_tol)
+        out = []
+        for year in (r for r in records if r.is_annual and r.period_start and r.period_end):
+            qs = [q for q in records if q.is_single_quarter and q.period_start and q.period_end
+                  and year.period_start <= q.period_start and q.period_end <= year.period_end]  # type: ignore[operator]
+            names = [n for n in year.values if (m := _metrics.get(n)) and m.kind == "currency"
+                     and not m.is_point_in_time]
+            checks = quarters_add_up(year.values, [q.values for q in qs], names, a, r_) if len(qs) == 4 else {}
+            out.append(CheckResult(ent.name, year.basis, year.label, checks))
+        return out
 
     def get_segment_data(self, entity: str | Entity, *, basis: Basis | str = "consolidated",
                          period: Any = "latest_annual") -> SegmentResult:

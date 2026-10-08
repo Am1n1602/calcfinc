@@ -79,7 +79,8 @@ class SqliteEntityRepository:
         aliases = tuple(r["alias"] for r in self._c.execute(
             "SELECT alias FROM entity_aliases WHERE entity_id = ? ORDER BY alias", (eid,)))
         return Entity(id=eid, name=row["name"], kind=row["kind"], identifiers=ids, aliases=aliases,
-                      currency=row["currency"], fiscal_year_end_month=row["fiscal_year_end_month"])
+                      currency=row["currency"], fiscal_year_end_month=row["fiscal_year_end_month"],
+                      sector=row["sector"])
 
     def _find_id(self, e: Entity) -> int | None:
         matched = {int(r["entity_id"]) for scheme, value in e.identifiers.items() for r in self._c.execute(
@@ -105,14 +106,14 @@ class SqliteEntityRepository:
         eid = self._find_id(entity)
         if eid is None:
             cur = self._c.execute(
-                "INSERT INTO entities (name, kind, currency, fiscal_year_end_month) VALUES (?, ?, ?, ?)",
-                (entity.name, entity.kind, entity.currency, entity.fiscal_year_end_month))
+                "INSERT INTO entities (name, kind, currency, fiscal_year_end_month, sector) VALUES (?, ?, ?, ?, ?)",
+                (entity.name, entity.kind, entity.currency, entity.fiscal_year_end_month, entity.sector))
             eid = int(cur.lastrowid or 0)
         else:
             self._c.execute(
                 "UPDATE entities SET name = ?, kind = ?, currency = COALESCE(?, currency), "
-                "fiscal_year_end_month = ? WHERE id = ?",
-                (entity.name, entity.kind, entity.currency, entity.fiscal_year_end_month, eid))
+                "fiscal_year_end_month = ?, sector = COALESCE(?, sector) WHERE id = ?",
+                (entity.name, entity.kind, entity.currency, entity.fiscal_year_end_month, entity.sector, eid))
         for scheme, value in entity.identifiers.items():
             try:
                 self._c.execute(

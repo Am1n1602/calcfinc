@@ -136,7 +136,8 @@ class _Ctx:
 def load_records(repos: Any, rows: Iterable[Mapping[str, Any]], *, entity: str | None = None,
                  currency: str | None = None, basis: Basis | str = "consolidated",
                  fiscal_year_end_month: int = 12, windows: PeriodWindows = DEFAULT_WINDOWS,
-                 source: Source | None = None, entity_kind: str = "company") -> LoadReport:
+                 source: Source | None = None, entity_kind: str = "company",
+                 sector: str | None = None) -> LoadReport:
     ctx = _Ctx(repos, currency, fiscal_year_end_month)
     errors: list[str] = []
     pending: list[tuple[str, str | None, FinancialFact]] = []
@@ -161,7 +162,7 @@ def load_records(repos: Any, rows: Iterable[Mapping[str, Any]], *, entity: str |
         for name, (ent, fye, cur) in ctx.seen.items():
             if ent is None:
                 ent = repos.entities.upsert(Entity(name=name, kind=entity_kind, currency=cur,
-                                                   fiscal_year_end_month=fye))
+                                                   fiscal_year_end_month=fye, sector=sector))
                 created.append(name)
             ids[name] = int(ent.id or 0)
         default_source = repos.sources.add(source).source_id if source is not None else None

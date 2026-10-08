@@ -53,9 +53,13 @@ def _shift(year: int, month: int, months: int) -> tuple[int, int]:
     return index // 12, index % 12 + 1
 
 
+FISCAL_WEEK_SLACK = timedelta(days=7)      # a 52/53-week period ends up to a week into the next month
+
+
 def position_in_year(d: date, fiscal_year_end_month: int) -> int:
-    """1..12: which month of its fiscal year `d` falls in."""
-    return (d.month - fiscal_year_end_month - 1) % 12 + 1
+    """1..12: which month of its fiscal year the period ending `d` falls in. A date in the first
+    week of a month counts as the previous month (a 52/53-week year can end on 3 September)."""
+    return ((d - FISCAL_WEEK_SLACK).month - fiscal_year_end_month - 1) % 12 + 1
 
 
 def classify_range(start: date, end: date, fiscal_year_end_month: int, windows: PeriodWindows) -> ResolvedPeriod:
@@ -101,5 +105,8 @@ def resolve_period(label: str, fiscal_year_end_month: int = 12,
 
 def fiscal_year(d: date, fiscal_year_end_month: int = 12) -> int:
     """Fiscal year labelled by the calendar year in which it ends: with a March year end,
-    31-Mar-2026 and 30-Jun-2025 are both FY2026. A fact's own financial_year always wins."""
+    31-Mar-2026 and 30-Jun-2025 are both FY2026. A date in the first week of a month counts as the
+    previous month, so a 52/53-week year ending 3-Sep-2023 with an August year end is FY2023.
+    A fact's own financial_year always wins."""
+    d = d - FISCAL_WEEK_SLACK
     return d.year if d.month <= fiscal_year_end_month else d.year + 1

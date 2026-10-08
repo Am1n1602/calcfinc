@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS entities (
     name                  TEXT    NOT NULL,
     kind                  TEXT    NOT NULL DEFAULT 'company',
     currency              TEXT,
-    fiscal_year_end_month INTEGER NOT NULL DEFAULT 12
+    fiscal_year_end_month INTEGER NOT NULL DEFAULT 12,
+    sector                TEXT
 );
 
 CREATE TABLE IF NOT EXISTS entity_identifiers (

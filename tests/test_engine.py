@@ -198,5 +198,107 @@ class TestEngine(unittest.TestCase):
         self.assertIn("total_equity", self.eng.available_metrics("TEST"))
 
 
+class TestBanks(unittest.TestCase):
+    """One year of a small bank. Interest cover would be (100 + 250) / 250 = 1.4 if it applied."""
+    GENERIC = {"revenue": 650, "pbt_before_exceptional": 100, "pbt": 100, "finance_costs": 250,
+               "net_profit": 80, "total_equity": 400, "total_assets": 8000, "borrowings_noncurrent": 200}
+    BANK = {"bank.deposits": 6000, "bank.gross_advances": 4500, "bank.provisions": 45,
+            "bank.interest_earned": 650, "bank.interest_expended": 250}
+
+    def engine(self, name, facts, **options):
+        rows = [{"entity": name, "metric": m, "period": "FY2026", "value": v, "currency": "USD"}
+                for m, v in facts.items()]
+        eng = FinancialEngine.from_records(rows, **options)
+        self.addCleanup(eng.repos.close)
+        return eng
+
+    def test_a_bank_is_recognised_by_reporting_deposits_and_loans(self):
+        eng = self.engine("Bnk", {**self.GENERIC, **self.BANK})
+        for ratio in ("interest_coverage", "ebit_margin", "debt_to_equity", "roce"):
+            r = eng.get_ratio("Bnk", ratio)
+            self.assertIsNone(r.value, ratio)
+            self.assertIn("does not apply to a bank", r.limitations[0], ratio)
+
+    def test_the_same_figures_for_a_company_without_bank_lines_are_computed(self):
+        eng = self.engine("Corp", self.GENERIC)
+        self.assertEqual(eng.get_ratio("Corp", "interest_coverage").value, D("1.4"))     # 350 / 250
+        self.assertEqual(eng.get_ratio("Corp", "debt_to_equity").value, D("0.5"))        # 200 / 400
+
+    def test_deposits_and_loans_alone_do_not_make_a_bank_but_interest_lines_and_loans_do(self):
+        no_interest = self.engine("Insurer", {**self.GENERIC, "bank.deposits": 6000, "bank.gross_advances": 4500})
+        self.assertEqual(no_interest.get_ratio("Insurer", "interest_coverage").value, D("1.4"))
+        no_deposits = self.engine("Indian", {**self.GENERIC, "bank.advances": 4500, "bank.interest_earned": 650,
+                                             "bank.interest_expended": 250})
+        self.assertIsNone(no_deposits.get_ratio("Indian", "interest_coverage").value)
+
+    def test_a_declared_sector_overrides_the_inference_both_ways(self):
+        corp = self.engine("Fin", {**self.GENERIC, **self.BANK}, sector="corporate")
+        self.assertEqual(corp.get_ratio("Fin", "interest_coverage").value, D("1.4"))
+        declared = self.engine("Solo", self.GENERIC, sector="Bank")                      # no bank.* lines at all
+        self.assertIsNone(declared.get_ratio("Solo", "interest_coverage").value)
+        self.assertEqual(declared.repos.entities.resolve("Solo").sector, "bank")         # normalised and stored
+        declared.repos.entities.upsert(Entity(name="Solo"))                              # an update without a sector
+        self.assertEqual(declared.repos.entities.resolve("Solo").sector, "bank")         # does not clear it
+
+    def test_ratios_that_do_apply_to_a_bank_are_untouched(self):
+        eng = self.engine("Bnk", {**self.GENERIC, **self.BANK})
+        self.assertEqual(eng.get_ratio("Bnk", "roe").value, 20)                          # 80 / 400
+        self.assertEqual(eng.get_ratio("Bnk", "bank.net_interest_income").value, 400)
+        self.assertEqual(eng.get_ratio("Bnk", "bank.loan_to_deposit").value, 75)         # 4500 / 6000
+        credit = eng.get_ratio("Bnk", "bank.credit_cost")                                # 45 / 4500
+        self.assertEqual(credit.value, 1)
+        self.assertIn("gross advances used", credit.limitations[0])
+        nim = eng.get_ratio("Bnk", "bank.net_interest_margin")                           # 400 / 8000
+        self.assertEqual(nim.value, 5)
+        self.assertIn("total assets used", nim.limitations[0])
+
+    def test_the_indian_counterparts_are_held_back_too(self):
+        from calcfinc.adapters import ind_as_xbrl
+
+        ind_as_xbrl.register()
+        eng = self.engine("Bnk", {**self.GENERIC, **self.BANK})
+        for ratio in ("india.roa", "india.dscr", "india.quick_ratio", "india.roce"):
+            r = eng.get_ratio("Bnk", ratio)
+            self.assertIsNone(r.value, ratio)
+            self.assertIn("does not apply to a bank", r.limitations[0], ratio)
+
+
+class TestEquityMethodIdentity(unittest.TestCase):
+    def test_equity_method_income_after_pre_tax_profit_is_part_of_the_identity(self):
+        from calcfinc.engine.check import check_values
+        # pre-tax 100, tax 25, equity-method income 10 after tax: continuing profit is 85
+        base = {"pbt": D(100), "tax_expense": D(25), "profit_continuing_ops": D(85)}
+        self.assertEqual(check_values({**base, "equity_method_income": D(10)}),
+                         {"pbt_minus_tax_eq_profit_continuing_ops": True})              # 100 - 25 + 10 = 85
+        self.assertEqual(check_values(base), {"pbt_minus_tax_eq_profit_continuing_ops": False})   # 100 - 25 = 75
+        # equity-method income already inside pre-tax profit: 100 - 25 = 75 reconciles on its own
+        inside = {"pbt": D(100), "tax_expense": D(25), "profit_continuing_ops": D(75), "equity_method_income": D(10)}
+        self.assertEqual(check_values(inside), {"pbt_minus_tax_eq_profit_continuing_ops": True})
+
+
+class TestCheckPeriods(unittest.TestCase):
+    def engine(self, year, quarters=(100, 110, 120, 130)):
+        rows = [{"entity": "Q", "metric": "revenue", "period": f"FY2026Q{n}", "value": v, "currency": "USD"}
+                for n, v in enumerate(quarters, 1)]
+        rows += [{"entity": "Q", "metric": "revenue", "period": "FY2026", "value": year, "currency": "USD"},
+                 {"entity": "Q", "metric": "eps_basic", "period": "FY2026", "value": "3", "currency": "USD"}]
+        eng = FinancialEngine.from_records(rows)
+        self.addCleanup(eng.repos.close)
+        return eng
+
+    def test_quarters_that_sum_to_the_year_pass(self):
+        (res,) = self.engine(460).check_periods("Q")
+        self.assertEqual((res.period, res.checks), ("FY2026", {"quarters_sum_eq_year:revenue": True}))
+
+    def test_a_year_from_another_vintage_fails(self):
+        (res,) = self.engine(470).check_periods("Q")
+        self.assertEqual(res.failed, ["quarters_sum_eq_year:revenue"])
+        self.assertTrue(res.needs_review)
+
+    def test_a_year_without_four_quarters_is_not_checked(self):
+        (res,) = self.engine(460, quarters=(100, 110, 120)).check_periods("Q")
+        self.assertFalse(res.ran)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,13 @@ EXPECTED = {
     "04_monthly_sme_dscr.py": ["2026-03 dscr: 2.3333", "2026-02 dscr: 1.8889", "leverage: 0.3636",
                                "revenue growth: 20 % month on month"],
     "05_cross_currency.py": ["revenue ranked: False", "#1 InCo: roe 30%", "#2 UsCo: roe 20%"],
+    "06_sec_companyfacts.py": ["6 quarters derived", "Q4 revenue: 120 USD (single quarter derived: 12M year-to-date "
+                               "less 9M (the SEC reports no stand-alone fourth quarter))",
+                               "revenue TTM (four quarters to 2025-12-31): 450",
+                               "80 (2026-02-20) -> 78 (2027-02-19)", "ROE FY2025: 19.5 pct",
+                               "10-K 0000123456-26-000004"],
+    "07_ind_as_xbrl.py": ["periods: ['FY2026 Q1']", "roe: 10", "shares outstanding: 100", "india.roce: 12.5 pct",
+                          "the ratio is not annualised"],
 }
 
 

@@ -43,18 +43,35 @@ class TestCoreIsGeneric(unittest.TestCase):
         self.assertIsNone(ind_as_xbrl.shares_outstanding(D(100), D(0)))
 
 
+FETCHER = Path("adapters") / "sec_companyfacts" / "fetch.py"     # the one file that may reach the network
+
+
 class TestNoDependencies(unittest.TestCase):
-    def test_only_the_standard_library_is_imported_and_nothing_touches_the_network(self):
+    def test_only_the_standard_library_is_imported_and_only_the_fetcher_may_use_the_network(self):
         offenders = []
         for p in SRC.rglob("*.py"):
+            rel = p.relative_to(SRC)
+            allowed = {"urllib"} if rel == FETCHER else set()
             for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
                 mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
                         else [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0 else [])
                 for m in mods:
                     top = m.split(".")[0]
-                    if top and top != "calcfinc" and (top not in sys.stdlib_module_names or top in NETWORK):
-                        offenders.append(f"{p.relative_to(SRC)}: {m}")
+                    if top and top != "calcfinc" and (
+                            top not in sys.stdlib_module_names or (top in NETWORK and top not in allowed)):
+                        offenders.append(f"{rel}: {m}")
         self.assertEqual(offenders, [])
+
+    def test_nothing_in_the_library_calls_the_fetcher(self):
+        users = sorted(str(p.relative_to(SRC)) for p in SRC.rglob("*.py")
+                       if p.relative_to(SRC) != FETCHER and "fetch_companyfacts" in p.read_text(encoding="utf-8"))
+        self.assertEqual(users, [str(Path("adapters") / "sec_companyfacts" / "__init__.py")])   # a re-export only
+
+    def test_importing_the_core_loads_no_network_module(self):
+        code = ("import sys, calcfinc; "
+                "print(sorted(m for m in ('urllib.request', 'http.client', 'socket', 'ssl') if m in sys.modules))")
+        out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, check=True)
+        self.assertEqual(out.stdout.strip(), "[]")
 
 
 class TestMissingInputsAreNeverZero(unittest.TestCase):

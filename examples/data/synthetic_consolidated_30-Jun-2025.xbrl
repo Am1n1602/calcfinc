@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC: a made-up filing in the exchange XBRL layout. Not real company data. -->
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"
+            xmlns:in-capmkt="http://example.test/in-capmkt"
+            xmlns:iso4217="http://www.xbrl.org/2003/iso4217">
+  <xbrli:context id="OneD"><xbrli:entity><xbrli:identifier scheme="syn">SYN</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2025-04-01</xbrli:startDate><xbrli:endDate>2025-06-30</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="OneI"><xbrli:entity><xbrli:identifier scheme="syn">SYN</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>2025-06-30</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:unit id="INR"><xbrli:measure>iso4217:INR</xbrli:measure></xbrli:unit>
+  <in-capmkt:RevenueFromOperations contextRef="OneD" unitRef="INR" decimals="-5">1000</in-capmkt:RevenueFromOperations>
+  <in-capmkt:OtherIncome contextRef="OneD" unitRef="INR">50</in-capmkt:OtherIncome>
+  <in-capmkt:Income contextRef="OneD" unitRef="INR">1050</in-capmkt:Income>
+  <in-capmkt:Expenses contextRef="OneD" unitRef="INR">800</in-capmkt:Expenses>
+  <in-capmkt:ProfitBeforeExceptionalItemsAndTax contextRef="OneD" unitRef="INR">250</in-capmkt:ProfitBeforeExceptionalItemsAndTax>
+  <in-capmkt:ProfitLossForPeriod contextRef="OneD" unitRef="INR">200</in-capmkt:ProfitLossForPeriod>
+  <in-capmkt:PaidUpValueOfEquityShareCapital contextRef="OneD" unitRef="INR">500</in-capmkt:PaidUpValueOfEquityShareCapital>
+  <in-capmkt:FaceValueOfEquityShareCapital contextRef="OneD" unitRef="INR">5</in-capmkt:FaceValueOfEquityShareCapital>
+  <in-capmkt:Assets contextRef="OneI" unitRef="INR">5000</in-capmkt:Assets>
+  <in-capmkt:Liabilities contextRef="OneI" unitRef="INR">3000</in-capmkt:Liabilities>
+  <in-capmkt:Equity contextRef="OneI" unitRef="INR">2000</in-capmkt:Equity>
+</xbrli:xbrl>
