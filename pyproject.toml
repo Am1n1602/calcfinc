@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "calcfinc"
+dynamic = ["version"]
+description = "Auditable financial metrics from periodic statements of any entity: every result carries its formula, input facts and limitations."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Am1n1602" }]
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["finance", "financial-statements", "ratios", "audit", "provenance"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+pandas = []   # placeholder: Phase 2 loaders
+mcp = []      # placeholder: Phase 4 MCP server
+adapters = [] # placeholder: Phase 3 source adapters
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.hatch.version]
+path = "src/calcfinc/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/calcfinc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
