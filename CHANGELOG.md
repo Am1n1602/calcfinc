@@ -4,6 +4,68 @@ All notable changes are listed here. The project follows [semantic versioning](h
 while the version is 0.x, a minor release may change the public API, and any such change is listed
 under "Changed". A change to a built-in ratio definition raises its `definition_version`.
 
+## 0.1.1 - 2026-10-09
+
+Fixes found by a live provenance test, three rounds of code review, and live runs on six more real
+companies (Apple, Microsoft, JPMorgan, TCS, Infosys and Reliance again; Tesla, Boeing, HCLTech and
+Titan new). If you save data in a database file, note the schema version under "Changed".
+
+### Fixed
+
+- `get_growth`, `get_cagr` and `compare_periods` now return the facts they were computed from, each
+  with its own source, filing date and currency. Before, `get_growth` and `get_cagr` listed their two
+  inputs with `source_id=None` and no report date, and `compare_periods` listed no inputs at all.
+  For a ratio (growth of a margin, say) the inputs are the underlying facts of each period, not a
+  stand-in named after the ratio. A mixed-vintage warning and any source review flags now appear in
+  `limitations` for these results too. A metric or period that does not exist still gives `None`
+  with its old reason and no invented inputs.
+
+- `get_cagr` explains a `None` caused by a non-positive end value or span.
+- `get_growth`, `segment_growth` and the net-margin bridge refuse to compare periods that are not
+  consecutive, instead of reporting a multi-year change as year-on-year; the bridge also says when
+  it cannot be built, and `compare_companies` says when entities are ranked on different periods.
+- Loading SEC data into an entity that already exists now applies the fiscal year end found in the
+  filings (or the one you pass) instead of keeping a constructor default of 12; a wrong explicit
+  year end no longer crashes the parser.
+- `sector=` now applies to an entity that already exists.
+- A not-reported fact can no longer erase a stored value at the same key.
+- Loading facts no longer runs one extra query per fact (it reads only the metrics a batch touches,
+  so many small batches stay fast), and period lookups no longer compare records field by field.
+- The net-margin bridge no longer reports a revenue effect when revenue did not move: the revenue
+  effect holds every cost, tax and other item at its prior amount.
+- SEC loading keeps an existing entity's fiscal year end when the filings have no full-year figures
+  (nothing could be inferred).
+- Indian XBRL numbers: free text such as "Rs 500 crore" is no longer read as 500, and a value the
+  library cannot hold is skipped instead of aborting the whole filing.
+- Review flags and derivation notes are matched to the period each input fact belongs to, so a flag
+  on an earlier period's input (through `prior()` or `ttm()`) is no longer missed or misattributed.
+- `segment_growth` rejects an unknown `kind`, and `"yoy"` no longer silently means quarter on quarter.
+- The SEC parser reads the currency a concept is reported in most often, not USD whenever present.
+- `roe`, `roe_avg`, `roe_ttm`, `india.roe`, `debt_to_equity`, `debt_to_capital`, `net_debt_to_equity`
+  and `equity_multiplier` return `None` with a reason when equity is not positive, instead of a
+  confidently signed but meaningless number (a loss over negative equity read as a positive return).
+  Their `definition_version` is now 2.
+- The SEC parser reads one currency for all of a filer's metrics (the one it reports most in overall),
+  so cross-metric ratios are not blocked by a concept that also carries a few translated figures.
+- A saved database now records its schema version: a file made by an earlier release is upgraded when
+  opened (it gains the `sector` column), and a file from a newer release is refused with a clear message.
+- `fetch_companyfacts` keeps its request spacing correct when called from several threads.
+- Indian XBRL: profit to owners and to minorities both reported as exactly 0 beside a non-zero profit
+  (arithmetically impossible, seen in 125 records of 20 companies) are treated as not reported, so a
+  filing's annual figure is no longer 0 where its quarters are not.
+- Review flags are checked on every record sharing a period label, so two periods with the same label
+  cannot hide each other's flags.
+
+### Changed
+
+- Definition versions: `roe`, `roe_avg`, `roe_ttm`, `india.roe`, `debt_to_equity`, `debt_to_capital`,
+  `net_debt_to_equity` and `equity_multiplier` are now version 2 (they refuse non-positive equity).
+- A database file now carries a schema version (`PRAGMA user_version = 1`). Files from 0.1.0 open
+  and are upgraded in place; a file written by a newer release is refused with a clear message.
+- `segment_growth(kind="yoy")` uses annual data only; the old quarterly fallback is gone.
+- `compare_periods` results have `inputs` (all facts used) and, for each metric,
+  `components[metric]["inputs"]`. Existing keys are unchanged.
+
 ## 0.1.0 - first release
 
 ### What it is
