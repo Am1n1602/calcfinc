@@ -2,7 +2,11 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -10,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -20,4 +24,26 @@ jobs:
       - run: python -m pip install -e .[dev]
       - run: ruff check .
       - run: mypy
-      - run: pytest
+      - run: python -W error::DeprecationWarning -m pytest -q
+
+  package:
+    # Build the sdist and wheel, then test the *installed wheel*, not the source tree.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - name: Install the wheel in a clean environment and run the examples
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/python -m pip install dist/*.whl
+          /tmp/clean/bin/python -c "import calcfinc; print(calcfinc.__version__)"
+          cd examples && for f in 0*.py; do /tmp/clean/bin/python "$f" > /dev/null; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

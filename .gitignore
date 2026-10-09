@@ -10,3 +10,8 @@ dist/
 .ruff_cache/
 *.db
 *.sqlite
+.coverage
+htmlcov/
+
+# kept locally, not published
+docs/regulatory-definitions.md

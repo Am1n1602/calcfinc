@@ -1,5 +1,7 @@
 """calcfinc: auditable financial metrics for any entity."""
-from calcfinc.engine import EngineError, EngineResult, FactRef, FinancialEngine
+import logging
+
+from calcfinc.engine import CheckResult, EngineError, EngineResult, FactRef, FinancialEngine
 from calcfinc.entity import Entity
 from calcfinc.fact import (
     Basis,
@@ -15,10 +17,14 @@ from calcfinc.period import PeriodWindows
 from calcfinc.registry import RatioSpec, register_metric, register_ratio
 from calcfinc.store import SqliteRepositories
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
+
+# A library logs through the standard `logging` module and leaves the handlers to the application.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
-    "Basis", "Entity", "EngineError", "EngineResult", "FactRef", "FinancialEngine", "FinancialFact",
-    "MappingConfidence", "PeriodWindows", "RatioSpec", "Segment", "SegmentFact", "SharePrice",
-    "Source", "SqliteRepositories", "StatementType", "register_metric", "register_ratio",
+    "Basis", "CheckResult", "Entity", "EngineError", "EngineResult", "FactRef", "FinancialEngine",
+    "FinancialFact", "MappingConfidence", "PeriodWindows", "RatioSpec", "Segment", "SegmentFact",
+    "SharePrice", "Source", "SqliteRepositories", "StatementType", "__version__", "register_metric",
+    "register_ratio",
 ]
