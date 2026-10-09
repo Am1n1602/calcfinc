@@ -3,8 +3,9 @@ that can touch the network, and nothing else calls it: loading and parsing take 
 already have.
 
 SEC fair-access rules (https://www.sec.gov/os/accessing-edgar-data):
-- Send a User-Agent that identifies you with a real contact, e.g. "Jane Doe jane@example.com".
-  Requests without one are refused. There is deliberately no default here.
+- Declare a User-Agent that identifies you with a real contact, e.g. "Jane Doe jane@example.com". The SEC
+  asks every automated client to, and says it will "manage" those that do not. There is deliberately no
+  default here, so a made-up identity is never sent on your behalf.
 - Stay under 10 requests per second. This helper spaces calls at least MIN_INTERVAL apart
   (5 per second), and does not retry on its own.
 - Download once and keep the file; the data changes only when a company files.

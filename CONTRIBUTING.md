@@ -25,8 +25,10 @@ All three must pass. CI runs them on Python 3.11, 3.12 and 3.13 on Linux, Window
    adapter (see `adapters/ind_as_xbrl/vocab.py`).
 4. **Standard library only** at runtime. The network may be used only in
    `adapters/sec_companyfacts/fetch.py` (a test enforces this).
-5. **No real data in the repository.** Test and example data is synthetic and written for the test.
-   Do not commit exchange, SEC or vendor data or anything derived from it.
+5. **No real data in the repository, with one documented exception.** Test and example data is synthetic and
+   written for the test. Do not commit exchange, SEC or vendor data or anything derived from it. The exception
+   is the two public TCS result filings in `examples/data/tcs`, kept unmodified (see its README) for the tour
+   notebook; they are not part of the installed package. Do not add more without discussing it first.
 6. **Definitions need evidence.** A new or changed ratio comes with the source of its definition.
    If regulators or standards disagree, say so in the pull request and in the ratio's `label`, and
    pick one with a reason. Changing an existing definition bumps its `version`.
@@ -63,12 +65,18 @@ if you can, on real filings *outside* it, and record what was and was not verifi
 1. Set `__version__` in `src/calcfinc/__init__.py`, move the changelog entry from "Unreleased" to the
    new version, regenerate `docs/ratios.md`, and make sure CI is green on `main`.
 2. One-time setup: on PyPI (and on TestPyPI) add a **trusted publisher** for owner `Am1n1602`,
-   repository `calcfinc`, workflow `release.yml`, environment `pypi` (`testpypi` on TestPyPI), and create
-   those two environments in the repository settings. No API token is ever stored.
-3. Dry run: Actions, "release", **Run workflow** publishes the build to TestPyPI. Install it with
-   `pip install --index-url https://test.pypi.org/simple/ --no-deps calcfinc` and try it.
-4. Release: `git tag v0.1.0 && git push origin v0.1.0`. The workflow refuses to publish if the tag
-   and `__version__` disagree.
+   repository `calcfinc`, workflow `release.yml`, environment `pypi` (`testpypi` on TestPyPI). In the
+   repository settings create the `testpypi` and `pypi` environments, and on `pypi` tick **Required
+   reviewers** and add yourself: that is what makes the release wait for a human. No API token is ever
+   stored.
+3. Release: `git tag -a v0.1.1 -m "..." && git push origin v0.1.1`. The workflow then runs
+   **build** (lint, types, tests, package; it refuses a tag that differs from `__version__`), then
+   **TestPyPI** (uploads that build), then **verify** (installs it from TestPyPI in a clean environment
+   and computes a ratio), then waits for your **approval** of the `pypi` environment in the Actions
+   tab, and only then publishes the same files to **PyPI**.
+4. Dry run without tagging: Actions, "release", **Run workflow**. It stops after TestPyPI and the
+   install check. TestPyPI keeps every file for good (a re-run skips files already uploaded), so a
+   dry run of a version uses that version on TestPyPI.
 
 ## Pull requests
 

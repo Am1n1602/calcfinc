@@ -1,6 +1,6 @@
 # calcfinc manual
 
-Version 0.1.1. This manual is tested: every Python example in it is run by the test suite, and
+Version 0.1.2. This manual is tested: every Python example in it is run by the test suite, and
 every value shown after `# ->` is checked against what the code returns.
 
 **Contents**
@@ -45,7 +45,7 @@ It is built around four promises:
   accident, and add your own.
 
 It has no runtime dependencies (Python 3.11 or later, standard library only) and does not
-ship, fetch (unless you call the one download helper) or bundle any market or vendor data.
+ship, fetch (unless you call the one download helper) or bundle any market or vendor data in the package.
 
 **What it deliberately does not do.** It does not convert currencies (amounts in different
 currencies are listed but never ranked), annualise a quarterly ratio (it says so instead), fill
@@ -475,6 +475,18 @@ eng.repos.sources.get(g.inputs[1].source_id).document_title           # -> 10-K 
 `compare_periods` lists every fact used in `inputs`, and each metric's own in
 `components[metric]["inputs"]`.
 
+`result.to_frame()` turns the inputs into a pandas DataFrame, one row per fact, with the columns
+`metric`, `period`, `value`, `currency`, `source_id` and `reported_at`. The values stay `Decimal`, so
+nothing is rounded on the way in. It needs pandas (`pip install "calcfinc[pandas]"`) and says so if it is
+missing.
+
+```python skip
+g.to_frame()
+#         metric  period  value currency  source_id reported_at
+# 0      revenue  FY2025    100      USD          1  2025-11-01
+# 1      revenue  FY2026    120      USD          2  2026-11-01
+```
+
 **To JSON.** `result.to_dict()` gives a JSON-safe dictionary in which every `Decimal` is an exact
 string, never a JSON number, so nothing is rounded in transit:
 
@@ -676,8 +688,8 @@ eng = FinancialEngine(repos)
 eng.get_ratio("AAPL", "roe", period="FY2025")
 ```
 
-- The SEC's fair-access rules require a User-Agent with a **real contact** (there is no default),
-  fewer than 10 requests per second (the helper keeps to 5 and never retries), and downloading once.
+- The SEC's fair-access guidance asks for a declared User-Agent with a **real contact** (there is no
+  default), at most 10 requests per second (the helper keeps to 5 and never retries), and downloading once.
 - Periods are matched on exact start and end dates; the filing's own `fy` and `fp` labels are never
   trusted. The fiscal year end is inferred from the 10-K year ends.
 - The SEC reports no stand-alone fourth quarter, so it is derived (year less nine months), and

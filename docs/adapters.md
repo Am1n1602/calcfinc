@@ -89,10 +89,12 @@ sec.load_companyfacts(repos, data, ticker="AAPL")
 ### Downloading, politely
 
 `fetch_companyfacts` is the only function in calcfinc that can use the network, and nothing else
-calls it. The SEC's [fair access rules](https://www.sec.gov/os/accessing-edgar-data) require:
+calls it. The SEC's [fair access guidance](https://www.sec.gov/os/accessing-edgar-data) asks for, and says
+it will "manage" automated clients that ignore:
 
-- a User-Agent that identifies you with a real contact (there is deliberately no default);
-- fewer than 10 requests per second (the helper keeps to 5 and never retries by itself);
+- a declared User-Agent that identifies you with a real contact (there is deliberately no default, and
+  calcfinc will not invent an identity for you; use your own, or a mailbox you create for the project);
+- at most 10 requests per second (the helper keeps to 5 and never retries by itself);
 - downloading once and keeping the file; the data changes only when a company files.
 
 ```python
@@ -102,8 +104,9 @@ open("CIK0000320193.json", "wb").write(raw)
 
 ## What is and is not verified
 
-- Every test in the repository uses synthetic data written for the test. No SEC or exchange data
-  is stored in this repository, and no test uses the network.
+- Tests use synthetic data written for the test, and no test uses the network. The one exception is
+  `examples/data/tcs`: two unmodified public TCS result filings, used by the tour notebook and by one test
+  that checks the figures against the filings. They are not part of the installed package.
 - **Ind-AS, checked on real filings outside the repository** (the installed wheel, in a separate
   environment, reading the author's earlier extraction output read-only): 2,938 raw `.xbrl`
   filings were parsed and mapped, and compared with the earlier pipeline's output for the same
