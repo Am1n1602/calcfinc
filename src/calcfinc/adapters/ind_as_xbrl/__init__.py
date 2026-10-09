@@ -15,6 +15,7 @@ from calcfinc.adapters.ind_as_xbrl.load import (
     load_canonical_file,
     load_raw_facts,
     load_xbrl_file,
+    load_xbrl_files,
     read_canonical_json,
     record_to_facts,
 )
@@ -23,6 +24,6 @@ from calcfinc.adapters.ind_as_xbrl.xbrl import parse_xbrl_file
 
 __all__ = [
     "IndAsReport", "RENAMES", "consistency_issues", "load_canonical", "load_canonical_file",
-    "load_raw_facts", "load_xbrl_file", "map_facts", "parse_number", "parse_xbrl_file",
+    "load_raw_facts", "load_xbrl_file", "load_xbrl_files", "map_facts", "parse_number", "parse_xbrl_file",
     "read_canonical_json", "record_to_facts", "register", "shares_outstanding",
 ]

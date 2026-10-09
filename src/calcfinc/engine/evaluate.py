@@ -129,7 +129,8 @@ class Evaluator:
             return _fail(f"{spec.name}: circular definition")
         why = NOT_FOR.get(spec.name, {}).get(self.sector or "")
         if why is not None:
-            return _fail(f"{spec.name} does not apply to a {self.sector}: {why}")
+            article = "an" if self.sector and self.sector[0] in "aeiou" else "a"
+            return _fail(f"{spec.name} does not apply to {article} {self.sector}: {why}")
         self._stack.append(spec.name)
         try:
             first_reason: str | None = None

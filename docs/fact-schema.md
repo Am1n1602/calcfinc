@@ -6,7 +6,8 @@ computes is derived from facts, and every result lists the facts it used.
 ## Rules that apply everywhere
 
 - **Numbers are exact.** Pass `int`, `str` (`"12.50"`) or `Decimal`. A `float` is refused,
-  because `0.1` as a float is not 0.1. Values may have at most 34 significant digits.
+  because `0.1` as a float is not 0.1. Values may have at most 34 significant digits and an
+  exponent between -999 and 999; anything beyond is refused, not rounded.
 - **Base units only.** Give 1200000, not "1.2 million". Scale in your loader or adapter, where it
   can be done exactly.
 - **Missing is missing.** An empty value is stored as "not reported". It is never 0, and a ratio
@@ -79,8 +80,8 @@ eng.get_ratio("Acme", "roe")
 ## Indian reporting
 
 India-specific inputs and the `india.*` ratios (Schedule III and ICAI forms) are optional. Call
-`calcfinc.adapters.ind_as_xbrl.register()` once before loading data or asking for them. The
-choices behind each definition are in [regulatory-definitions.md](regulatory-definitions.md).
+`calcfinc.adapters.ind_as_xbrl.register()` once before loading data or asking for them. Each
+ratio's formula and meaning is in [ratios.md](ratios.md).
 
 ## Results
 

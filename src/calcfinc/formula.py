@@ -31,11 +31,18 @@ WINDOWED = ("prior", "ttm")          # functions that read other periods; they t
 _FUNCS = {"abs", "min", "max", "round", "sqrt", *WINDOWED}
 
 
+MAX_LENGTH = 2000        # characters; the longest built-in formula is under 100
+
+
 def _parse(expr: str) -> ast.Expression:
+    if len(expr) > MAX_LENGTH:
+        raise CalcError(f"expression is longer than {MAX_LENGTH} characters")
     try:
         return ast.parse(expr, mode="eval")
     except SyntaxError as e:
         raise CalcError(f"cannot parse expression: {e}") from e
+    except (RecursionError, MemoryError):
+        raise CalcError("expression is too deeply nested") from None
 
 
 def _dotted(node: ast.AST) -> str | None:
@@ -71,7 +78,10 @@ def names_in(expr: str) -> tuple[str, ...]:
         for child in ast.iter_child_nodes(node):
             walk(child, in_prior)
 
-    walk(_parse(expr).body, False)
+    try:
+        walk(_parse(expr).body, False)
+    except RecursionError:
+        raise CalcError("expression is too deeply nested") from None
     return tuple(out)
 
 
@@ -161,6 +171,8 @@ def evaluate(expr: str, env: Mapping[str, Any]) -> Decimal:
         return ev(tree)
     except DecimalException as e:
         raise CalcError(f"arithmetic error: {type(e).__name__}") from e
+    except RecursionError:
+        raise CalcError("expression is too deeply nested") from None
 
 
 def calculate(expr: str, **vars: Any) -> Decimal:

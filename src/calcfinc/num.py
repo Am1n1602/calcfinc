@@ -52,6 +52,10 @@ def to_decimal(v: object) -> Decimal:
         raise ValueError(f"not a finite number: {v!r}")
     if len(d.as_tuple().digits) > PREC:
         raise ValueError(f"more than {PREC} significant digits: {v!r}")
+    exponent = d.as_tuple().exponent
+    if not isinstance(exponent, int) or not CTX.Emin <= exponent <= CTX.Emax or (
+            d and not CTX.Emin <= d.adjusted() <= CTX.Emax):
+        raise ValueError(f"exponent out of range (supported: 1e-999 to 1e999): {v!r}")
     return d
 
 

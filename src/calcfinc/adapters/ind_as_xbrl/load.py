@@ -201,6 +201,14 @@ def load_xbrl_file(repos: Any, path: str | Path, *, entity: str, basis: Basis | 
     return load_raw_facts(repos, parse_xbrl_file(p, entity), entity=entity, basis=basis, source=source, **kwargs)
 
 
+def load_xbrl_files(repos: Any, paths: Iterable[str | Path], *, entity: str, **kwargs: Any) -> list[IndAsReport]:
+    """Load several filings, each "Revision" after the "Original" it corrects, whatever order they
+    are given in. The filing carries no date, so with no `reported_at` a later load overwrites an
+    earlier one for the same period, and a revision must therefore come last."""
+    ordered = sorted((Path(p) for p in paths), key=lambda p: ("revision" in p.stem.lower(), p.name))
+    return [load_xbrl_file(repos, p, entity=entity, **kwargs) for p in ordered]
+
+
 def read_canonical_json(path: str | Path) -> list[dict[str, Any]]:
     """Canonical JSON with numbers read as exact Decimals (never through float)."""
     data = json.loads(Path(path).read_text(encoding="utf-8"), parse_float=Decimal, parse_int=Decimal)

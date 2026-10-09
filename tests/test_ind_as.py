@@ -106,6 +106,10 @@ class TestRawFactMapping(unittest.TestCase):
         self.assertEqual((r["revenue"], r["pbt"], r["oci"]), (D("1000"), D("260"), D("-5")))
         self.assertNotIn("999", [str(v) for v in r.values()])
 
+    def test_net_premium_income_is_the_insurer_marker(self):
+        r = canonical.map_facts([self.row("in-capmkt:NetPremiumIncome", "259,984")])[0]
+        self.assertEqual(r["insurance_net_premium"], D("259984"))
+
     def test_bank_totals_are_built_only_from_complete_parts(self):
         rows = [self.row("in-capmkt:Capital", "100"), self.row("in-capmkt:ReservesAndSurplus", "900"),
                 self.row("in-capmkt:CashAndBalancesWithReserveBankOfIndia", "30"),
@@ -188,6 +192,16 @@ class TestXbrlFile(unittest.TestCase):
         self.assertEqual(eng.get_metric("SYN", "shares_outstanding").value, 100)   # 500 / 5
         src = eng.get_metric("SYN", "revenue").inputs[0].source_id
         self.assertTrue(repos.sources.get(src).content_hash)
+
+    def test_a_revision_is_loaded_after_its_original_whatever_the_order_given(self):
+        revised = XBRL.replace(">1,000<", ">900<").replace(">1050<", ">950<")
+        repos = SqliteRepositories(":memory:")
+        self.addCleanup(repos.close)
+        revision = self.tmp(revised, "syn_Revision_Consolidated_30-Jun-2025.xbrl")
+        original = self.tmp(XBRL, "syn_Original_Consolidated_30-Jun-2025.xbrl")
+        reports = ind.load_xbrl_files(repos, [revision, original], entity="SYN")          # revision listed first
+        self.assertEqual(len(reports), 2)
+        self.assertEqual(FinancialEngine(repos).get_metric("SYN", "revenue").value, 900)
 
     def test_the_basis_must_be_known(self):
         repos = SqliteRepositories(":memory:")

@@ -263,6 +263,35 @@ class TestBanks(unittest.TestCase):
             self.assertIn("does not apply to a bank", r.limitations[0], ratio)
 
 
+class TestInsurers(unittest.TestCase):
+    FACTS = {"revenue": 650, "pbt_before_exceptional": 100, "pbt": 100, "finance_costs": 250, "net_profit": 80,
+             "total_equity": 400, "total_assets": 8000, "borrowings_noncurrent": 200,
+             "current_assets": 500, "current_liabilities": 400, "insurance.net_earned_premium": 600}
+
+    def engine(self, facts, **options):
+        rows = [{"entity": "Ins", "metric": m, "period": "FY2026", "value": v, "currency": "USD"}
+                for m, v in facts.items()]
+        eng = FinancialEngine.from_records(rows, **options)
+        self.addCleanup(eng.repos.close)
+        return eng
+
+    def test_net_premium_marks_an_insurer_and_holds_back_the_ratios_that_do_not_fit(self):
+        eng = self.engine(self.FACTS)
+        r = eng.get_ratio("Ins", "current_ratio")
+        self.assertIsNone(r.value)
+        self.assertIn("does not apply to an insurer", r.limitations[0])
+        self.assertIsNone(eng.get_ratio("Ins", "free_cash_flow").value)
+
+    def test_an_insurer_keeps_its_debt_and_interest_cover_ratios(self):
+        eng = self.engine(self.FACTS)
+        self.assertEqual(eng.get_ratio("Ins", "debt_to_equity").value, D("0.5"))          # 200 / 400
+        self.assertEqual(eng.get_ratio("Ins", "interest_coverage").value, D("1.4"))       # 350 / 250
+
+    def test_without_premium_the_same_figures_give_a_current_ratio(self):
+        plain = {k: v for k, v in self.FACTS.items() if k != "insurance.net_earned_premium"}
+        self.assertEqual(self.engine(plain).get_ratio("Ins", "current_ratio").value, D("1.25"))   # 500 / 400
+
+
 class TestEquityMethodIdentity(unittest.TestCase):
     def test_equity_method_income_after_pre_tax_profit_is_part_of_the_identity(self):
         from calcfinc.engine.check import check_values

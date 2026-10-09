@@ -47,6 +47,11 @@ ind_as_xbrl.load_xbrl_file(repos, "results_consolidated.xbrl", entity="ACME")
   you do not trust, parse it with a hardened parser and use `map_facts`.
 - Pass `reported_at=` (the filing date) so a later revised filing is kept beside the original
   instead of overwriting it.
+- **Original and Revision filings** carry the same board-meeting date and no filing date, so the
+  file cannot say which is later. Without `reported_at` a later load overwrites an earlier one for
+  the same period. `load_xbrl_files(repos, paths, entity=...)` loads every "Revision" after its
+  "Original" whatever order you give, so the correction wins. (19 revisions exist in the
+  author's 2,960 files; most have no original beside them.)
 
 ## SEC companyfacts
 

@@ -413,3 +413,15 @@ restrict(("gross_margin", "inventory_turnover", "receivables_turnover", "payable
           "dso", "dio", "dpo"), "bank", BANK_WHY["trade"])
 restrict(("free_cash_flow", "ocf_margin", "cash_conversion", "capex_to_revenue", "capex_to_depreciation"),
          "bank", BANK_WHY["cash_flow"])
+
+# --- insurers: debt and interest cover are kept (they borrow like anyone), the rest is held back ---
+INSURER_WHY = {
+    "current": "an insurer's balance sheet is not split into current and non-current",
+    "trade": "an insurer has no inventory, trade receivables or cost of goods",
+    "cash_flow": "an insurer's operating cash flow is dominated by premiums received and claims paid",
+}
+restrict(("working_capital", "current_ratio", "quick_ratio", "cash_ratio"), "insurer", INSURER_WHY["current"])
+restrict(("gross_margin", "inventory_turnover", "receivables_turnover", "payables_turnover",
+          "dso", "dio", "dpo"), "insurer", INSURER_WHY["trade"])
+restrict(("free_cash_flow", "ocf_margin", "cash_conversion", "capex_to_revenue", "capex_to_depreciation"),
+         "insurer", INSURER_WHY["cash_flow"])

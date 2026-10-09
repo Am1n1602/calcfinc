@@ -12,6 +12,7 @@ inferred: `statement_type`, `is_point_in_time`, `financial_year`, `quarter`, `is
 """
 from __future__ import annotations
 
+import difflib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -144,6 +145,9 @@ def load_records(repos: Any, rows: Iterable[Mapping[str, Any]], *, entity: str |
     unknown: set[str] = set()
 
     for n, row in enumerate(rows, 1):
+        if not isinstance(row, Mapping):
+            errors.append(f"row {n}: expected a mapping of column to value, got {type(row).__name__}")
+            continue
         n = int(row.get("_row", n))
         bad = {k for k in row if not k.startswith("_") and k not in COLUMNS} - unknown
         for k in sorted(bad):
@@ -200,7 +204,10 @@ def _convert(row: Mapping[str, Any], ctx: _Ctx, default_entity: str | None, defa
         raise _Bad("statement_type", f"{st_raw!r} is not one of {[s.value for s in StatementType]}") from None
     if st is None:
         if spec is None:
-            raise _Bad("metric", f"unknown metric {metric!r}; register_metric() it or add a statement_type")
+            near = difflib.get_close_matches(metric, metrics.canonical_names(), n=1)
+            hint = f"; did you mean {near[0]!r}?" if near else ""
+            raise _Bad("metric", f"unknown metric {metric!r}{hint}; or register_metric() it, "
+                                 "or add a statement_type")
         st = spec.statement_type
     instant = _bool(row.get("is_point_in_time"), "is_point_in_time")
     if instant is None:

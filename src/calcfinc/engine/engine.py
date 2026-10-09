@@ -76,8 +76,9 @@ def _jsonable(x: Any) -> Any:
     return x
 
 
-class EngineError(Exception):
-    pass
+class EngineError(ValueError):
+    """A request the engine cannot answer at all: unknown entity, unrecognised period spec, bad
+    argument. (A figure that cannot be computed is not an error: it comes back as value=None.)"""
 
 
 _KINDS = ("latest", "latest_annual", "latest_quarter", "latest_month")
@@ -219,6 +220,8 @@ class FinancialEngine:
     # infrastructure
     # ------------------------------------------------------------------ #
     def _entity(self, key: str | Entity) -> Entity:
+        if not isinstance(key, (str, Entity)):
+            raise EngineError(f"entity must be a name, identifier or Entity, not {type(key).__name__}")
         try:
             ent = (self._repos.entities.get(key.id) if isinstance(key, Entity) and key.id is not None
                    else self._repos.entities.resolve(key if isinstance(key, str) else key.name))
@@ -313,14 +316,16 @@ class FinancialEngine:
 
     def _sector(self, ent: Entity, records: list[PeriodRecord]) -> str | None:
         """The declared sector, else 'bank' when the entity reports interest earned and expended
-        (the defining lines of a bank's income statement) and deposits or loans."""
+        (the defining lines of a bank's income statement) and deposits or loans, else 'insurer'
+        when it reports net premium."""
         if ent.sector is not None:
             return ent.sector
         if id(records) not in self._inferred:
             has = {m for r in records for m in r.values}
             self._inferred[id(records)] = (
                 "bank" if {"bank.interest_earned", "bank.interest_expended"} <= has
-                and has & {"bank.deposits", "bank.advances", "bank.gross_advances"} else None)
+                and has & {"bank.deposits", "bank.advances", "bank.gross_advances"}
+                else "insurer" if "insurance.net_earned_premium" in has else None)
         return self._inferred[id(records)]
 
     def _formula_result(self, kind: str, ent: Entity, spec: RatioSpec, basis: Basis | str,

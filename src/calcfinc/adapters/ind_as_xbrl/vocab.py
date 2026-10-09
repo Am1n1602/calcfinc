@@ -9,7 +9,7 @@ suggested coverage formulas) matches the generic ratio, there is no `india.*` tw
 ratio, net profit ratio, interest coverage (EBIT / interest) and the RBI-form NPA and provision
 coverage ratios are the generic ones. `roa_avg` is already the RBI basis for banks. Schedule III
 leaves the exact formulas to each company, so these are the forms ICAI uses in its material;
-see docs/regulatory-definitions.md for the evidence behind each.
+each ratio's `label` states the form it follows.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from decimal import Decimal
 from calcfinc.fact import StatementType
 from calcfinc.num import div
 from calcfinc.registry.metrics import register_metric
-from calcfinc.registry.ratios import BANK_WHY, RatioSpec, register_ratio, restrict
+from calcfinc.registry.ratios import BANK_WHY, INSURER_WHY, RatioSpec, register_ratio, restrict
 
 # Ind-AS / source tag names that differ from the generic core vocabulary.
 RENAMES = {"pat_continuing_ops": "profit_continuing_ops"}
@@ -109,6 +109,9 @@ def _restrictions() -> None:
     restrict(("india.inventory_turnover", "india.trade_receivables_turnover",
               "india.trade_payables_turnover"), "bank", BANK_WHY["trade"])
     restrict(("india.dscr",), "bank", BANK_WHY["debt"])
+    restrict(("india.quick_ratio",), "insurer", INSURER_WHY["current"])
+    restrict(("india.inventory_turnover", "india.trade_receivables_turnover",
+              "india.trade_payables_turnover"), "insurer", INSURER_WHY["trade"])
 
 
 def register() -> None:

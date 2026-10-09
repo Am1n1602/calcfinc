@@ -57,6 +57,8 @@ TAG_MAP: dict[str, str] = {
     "dividends": "in-capmkt:DividendsPaidClassifiedAsFinancingActivities",
     "capex_ppe": "in-capmkt:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
     "capex_intangibles": "in-capmkt:PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities",
+    # insurers (life insurers file net premium income; it marks the filer as an insurer)
+    "insurance_net_premium": "in-capmkt:NetPremiumIncome",
     # banks
     "bank_interest_earned": "in-capmkt:InterestEarned",
     "bank_interest_expended": "in-capmkt:InterestExpended",
@@ -105,6 +107,7 @@ DEBT_ALT_TAGS = {
 # Source-side canonical name -> calcfinc metric name (names not listed are unchanged).
 NAME_MAP = {
     "pat_continuing_ops": "profit_continuing_ops",
+    "insurance_net_premium": "insurance.net_earned_premium",
     "bank_interest_earned": "bank.interest_earned",
     "bank_interest_expended": "bank.interest_expended",
     "bank_operating_profit": "bank.operating_profit",
