@@ -1,6 +1,6 @@
 # calcfinc manual
 
-Version 0.1.0. This manual is tested: every Python example in it is run by the test suite, and
+Version 0.1.1. This manual is tested: every Python example in it is run by the test suite, and
 every value shown after `# ->` is checked against what the code returns.
 
 **Contents**
@@ -453,6 +453,27 @@ r.ok                  # -> True
 - a ratio that mixes flows with balances over part of a year ("not annualised").
 
 Anyone passing a number onward should pass its limitations with it.
+
+**Growth, CAGR and comparisons keep their lineage too.** Each input is the fact from its own period,
+with its own source and filing date, so a restated year beside an unrestated one is visible. For a
+ratio, the inputs are the underlying facts of each period, not the ratio's name:
+
+```python
+from calcfinc import FinancialEngine
+
+eng = FinancialEngine.from_records([
+    {"entity": "A", "metric": "revenue", "period": "FY2025", "value": "100", "currency": "USD",
+     "source": "10-K 2025", "reported_at": "2025-11-01"},
+    {"entity": "A", "metric": "revenue", "period": "FY2026", "value": "120", "currency": "USD",
+     "source": "10-K 2026", "reported_at": "2026-11-01"},
+])
+g = eng.get_growth("A", "revenue")
+[(i.period, i.value, i.reported_at.isoformat()) for i in g.inputs]    # -> [('FY2025', Decimal('100'), '2025-11-01'), ('FY2026', Decimal('120'), '2026-11-01')]
+eng.repos.sources.get(g.inputs[1].source_id).document_title           # -> 10-K 2026
+```
+
+`compare_periods` lists every fact used in `inputs`, and each metric's own in
+`components[metric]["inputs"]`.
 
 **To JSON.** `result.to_dict()` gives a JSON-safe dictionary in which every `Decimal` is an exact
 string, never a JSON number, so nothing is rounded in transit:
