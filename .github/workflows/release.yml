@@ -1,10 +1,19 @@
 name: release
 
-# Pushing a tag such as v0.1.0 builds the package, checks that the tag matches the version in the
-# code, and publishes to PyPI with trusted publishing (no API token is stored anywhere).
-# One-time setup on PyPI: add a trusted publisher for owner Am1n1602, repository calcfinc,
-# workflow release.yml, environment pypi. Run this workflow by hand (workflow_dispatch) to
-# publish to TestPyPI first, with a trusted publisher set up there for environment testpypi.
+# build -> TestPyPI -> install check -> manual approval -> PyPI
+#
+# Push a tag such as v0.1.1. The workflow builds once, publishes that exact build to TestPyPI, installs it
+# from there as a user would, then stops at the "pypi" job until a reviewer approves it in the Actions
+# tab. Approval publishes the same files to PyPI. No API token is stored anywhere (trusted publishing).
+#
+# One-time setup
+#   GitHub  Settings > Environments: create "testpypi" and "pypi"; on "pypi" tick "Required reviewers"
+#           and add yourself. That setting is what makes the pipeline wait for a human; without it the
+#           pypi job runs straight after TestPyPI.
+#   PyPI    add a trusted publisher on both pypi.org and test.pypi.org: owner Am1n1602, repository
+#           calcfinc, workflow release.yml, environment pypi (on test.pypi.org: testpypi).
+#
+# Run the workflow by hand (Actions > release > Run workflow) to stop after TestPyPI: that is a dry run.
 
 on:
   push:
@@ -17,6 +26,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,11 +35,11 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install build twine -e .[dev]
       - run: ruff check . && mypy && pytest -q
+      - id: version
+        run: echo "version=$(python -c 'import calcfinc; print(calcfinc.__version__)')" >> "$GITHUB_OUTPUT"
       - name: The tag must match the version in the code
         if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          version=$(python -c "import calcfinc; print(calcfinc.__version__)")
-          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != version $version"; exit 1; }
+        run: test "v${{ steps.version.outputs.version }}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != version ${{ steps.version.outputs.version }}"; exit 1; }
       - run: python -m build
       - run: twine check --strict dist/*
       - uses: actions/upload-artifact@v4
@@ -37,7 +48,6 @@ jobs:
           path: dist/
 
   testpypi:
-    if: github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     environment: testpypi
@@ -51,10 +61,38 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true          # a re-run after a later failure must not fail on files already uploaded
+
+  verify-testpypi:
+    needs: [build, testpypi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the TestPyPI release in a clean environment and use it
+        run: |
+          python -m venv /tmp/check
+          for attempt in 1 2 3 4 5 6 7 8; do
+            /tmp/check/bin/python -m pip install --no-cache-dir --index-url https://test.pypi.org/simple/ \
+              "calcfinc==${{ needs.build.outputs.version }}" && break
+            echo "not visible yet (attempt $attempt); waiting"; sleep 15
+          done
+          /tmp/check/bin/python - <<'EOF'
+          import calcfinc
+          from calcfinc import FinancialEngine
+          eng = FinancialEngine.from_records([
+              {"entity": "A", "metric": "net_profit", "period": "FY2026", "value": "150", "currency": "USD"},
+              {"entity": "A", "metric": "total_equity", "period": "FY2026", "value": "600", "currency": "USD"}])
+          roe = eng.get_ratio("A", "roe")
+          assert str(roe.value) == "25", roe
+          print("installed from TestPyPI:", calcfinc.__version__, "roe", roe.value)
+          EOF
 
   pypi:
+    # Waits here for approval when the "pypi" environment has required reviewers.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, testpypi, verify-testpypi]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
