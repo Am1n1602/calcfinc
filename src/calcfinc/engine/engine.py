@@ -5,6 +5,7 @@ entry saying why -- never 0, never a guess.
 """
 from __future__ import annotations
 
+import importlib
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -58,6 +59,17 @@ class EngineResult:
         """JSON-safe form: Decimals become exact strings, never JSON numbers."""
         out: dict[str, Any] = _jsonable(self)
         return out
+
+    def to_frame(self) -> Any:
+        """The facts this result was computed from as a pandas DataFrame, one row per fact (columns
+        metric, period, value, currency, source_id, reported_at). `value` stays a Decimal, so nothing is
+        rounded on the way into the frame. Needs pandas (`pip install calcfinc[pandas]`)."""
+        try:
+            pd = importlib.import_module("pandas")
+        except ImportError:
+            raise ImportError("to_frame() needs pandas: pip install 'calcfinc[pandas]'") from None
+        columns = ["metric", "period", "value", "currency", "source_id", "reported_at"]
+        return pd.DataFrame([[getattr(i, c) for c in columns] for i in self.inputs], columns=columns)
 
 
 def _jsonable(x: Any) -> Any:

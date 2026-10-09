@@ -9,6 +9,7 @@ fence says `python skip` is shown but not run. docs/ratios.md must match the reg
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -85,7 +86,32 @@ def run_markdown(testcase: unittest.TestCase, relative: str) -> None:
         testcase.fail(f"{relative}: an example failed\n{textwrap.indent(done.stderr[-1500:], '    ')}")
 
 
+def notebook_program(path: Path) -> str:
+    """The code cells of a notebook as one program, `# ->` claims checked; cells tagged skip-test are left out
+    (they install packages or need the network)."""
+    cells = json.loads(path.read_text(encoding="utf-8"))["cells"]
+    code = [instrument("".join(c["source"]), f"{path.name}:cell{n}") for n, c in enumerate(cells)
+            if c["cell_type"] == "code" and "skip-test" not in c.get("metadata", {}).get("tags", [])]
+    return PRELUDE + "\n".join(code)
+
+
 class TestDocumentation(unittest.TestCase):
+    def test_the_tour_notebook_runs_and_its_claims_hold(self):
+        try:
+            import pandas  # noqa: F401  (the notebook shows to_frame())
+        except ImportError:
+            self.skipTest("pandas is not installed")
+        if not (ROOT / "examples" / "data" / "tcs").is_dir():
+            self.skipTest("the TCS sample filings are in the repository, not in the source distribution")
+        with tempfile.TemporaryDirectory() as d:
+            script = Path(d, "tour.py")
+            script.write_text(notebook_program(ROOT / "examples" / "calcfinc_tour.ipynb"), encoding="utf-8")
+            # run from the repository root, as a reader with a clone would: the TCS cell then reads the two
+            # shipped filings instead of downloading them
+            done = subprocess.run([sys.executable, str(script)], cwd=ROOT, capture_output=True, text=True, timeout=120)
+        if done.returncode:
+            self.fail("the tour notebook failed\n" + textwrap.indent(done.stderr[-1500:], "    "))
+
     def test_readme_examples_run_and_print_what_the_text_says(self):
         run_markdown(self, "README.md")
 

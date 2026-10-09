@@ -156,5 +156,41 @@ class TestSerialisation(Base):
         self.assertEqual(c["components"]["revenue"]["inputs"][1]["reported_at"], "2026-11-01")
 
 
+try:
+    import pandas as pd
+except ImportError:                                                     # pragma: no cover
+    pd = None
+
+
+@unittest.skipIf(pd is None, "pandas is not installed")
+class TestToFrame(Base):
+    def test_the_inputs_become_one_row_per_fact_with_exact_decimals(self):
+        eng = self.engine([row("revenue", "FY2025", "100.10", "10-K 2025", "2025-11-01"),
+                           row("revenue", "FY2026", "120.20", "10-K 2026", "2026-11-01")])
+        frame = eng.get_growth("Acme", "revenue").to_frame()
+        self.assertEqual(list(frame.columns), ["metric", "period", "value", "currency", "source_id", "reported_at"])
+        self.assertEqual(frame["period"].tolist(), ["FY2025", "FY2026"])
+        self.assertEqual(frame["value"].tolist(), [D("100.10"), D("120.20")])           # Decimal, not float
+        self.assertIsInstance(frame["value"][0], D)
+        self.assertEqual(frame["reported_at"].tolist(), [date(2025, 11, 1), date(2026, 11, 1)])
+
+    def test_a_result_with_no_inputs_gives_an_empty_frame_with_the_same_columns(self):
+        eng = self.engine([row("revenue", "FY2026", "1", "s", "2026-11-01")])
+        frame = eng.get_metric("Acme", "ebit").to_frame()                              # ebit cannot be computed
+        self.assertEqual((len(frame), len(frame.columns)), (0, 6))
+
+
+class TestToFrameWithoutPandas(unittest.TestCase):
+    def test_the_error_says_how_to_install_pandas(self):
+        import sys
+        from unittest import mock
+
+        from calcfinc import EngineResult
+        with mock.patch.dict(sys.modules, {"pandas": None}):                # makes `import pandas` fail
+            with self.assertRaises(ImportError) as ctx:
+                EngineResult("ratio", "x", None).to_frame()
+        self.assertIn("calcfinc[pandas]", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

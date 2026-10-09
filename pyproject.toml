@@ -49,6 +49,7 @@ packages = ["src/calcfinc"]
 [tool.hatch.build.targets.sdist]
 include = ["/src", "/tests", "/examples", "/docs", "/scripts", "/README.md", "/LICENSE", "/CHANGELOG.md",
            "/SECURITY.md", "/CONTRIBUTING.md"]
+exclude = ["/examples/data/tcs"]      # third-party filings stay on GitHub; PyPI carries code only
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -68,6 +69,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# A notebook cell ends with a bare expression on purpose: that is what the reader sees as output.
+"*.ipynb" = ["B018", "E501"]
 
 [tool.mypy]
 strict = true

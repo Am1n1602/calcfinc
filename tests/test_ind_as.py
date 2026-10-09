@@ -210,6 +210,32 @@ class TestXbrlFile(unittest.TestCase):
             ind.load_xbrl_file(repos, self.tmp(XBRL, "mystery.xbrl"), entity="SYN")
 
 
+FOLDER = Path(__file__).resolve().parent.parent / "examples" / "data" / "tcs"
+
+
+@unittest.skipUnless(FOLDER.is_dir(), "the TCS sample filings are in the repository, not in the source distribution")
+class TestShippedTcsFilings(unittest.TestCase):
+    """The two real TCS filings in examples/data/tcs, as the tour notebook uses them."""
+
+    FOLDER = FOLDER
+
+    def test_the_filings_load_and_give_the_schedule_iii_roe_from_their_own_figures(self):
+        from fractions import Fraction
+        repos = SqliteRepositories(":memory:")
+        self.addCleanup(repos.close)
+        ind.load_xbrl_files(repos, sorted(self.FOLDER.glob("*.xbrl")), entity="TCS")
+        r = FinancialEngine(repos).get_ratio("TCS", "india.roe", period="FY2025")
+        facts = {(i.metric, i.period): i.value for i in r.inputs}
+        # the figures as filed, in rupees: profit Rs 48,797 crore; equity Rs 95,771 crore (2025), Rs 91,319 crore (2024)
+        self.assertEqual(facts, {("net_profit", "FY2025"): 487970000000, ("total_equity", "FY2025"): 957710000000,
+                                 ("total_equity", "FY2024"): 913190000000})
+        # 100 x profit / average equity, worked out exactly from those three figures
+        exact = Fraction(100 * 487970000000 * 2, 957710000000 + 913190000000)
+        self.assertLess(abs(r.value - D(exact.numerator) / D(exact.denominator)), D("1e-20"))
+        self.assertEqual(round(r.value, 4), D("52.1642"))
+        self.assertIn("india.preference_dividend not reported", r.limitations[0])
+
+
 class TestCanonicalRecords(unittest.TestCase):
     def setUp(self):
         self.repos = SqliteRepositories(":memory:")
