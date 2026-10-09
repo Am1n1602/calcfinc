@@ -17,7 +17,7 @@ from calcfinc.period import PeriodWindows
 from calcfinc.registry import RatioSpec, register_metric, register_ratio
 from calcfinc.store import SqliteRepositories
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 # A library logs through the standard `logging` module and leaves the handlers to the application.
 logging.getLogger(__name__).addHandler(logging.NullHandler())

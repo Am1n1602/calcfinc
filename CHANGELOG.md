@@ -4,6 +4,29 @@ All notable changes are listed here. The project follows [semantic versioning](h
 while the version is 0.x, a minor release may change the public API, and any such change is listed
 under "Changed". A change to a built-in ratio definition raises its `definition_version`.
 
+## 0.1.2 - 2026-10-09
+
+Makes the project easier to try: a result's audit trail as a DataFrame, a tour notebook for Colab with a real
+Apple and a real TCS example, and a README built around them. No change to any calculation.
+
+### Added
+
+- `EngineResult.to_frame()`: the facts behind a result as a pandas DataFrame, one row per fact, with
+  values kept as exact `Decimal`s (needs the `pandas` extra).
+- A tour notebook, `examples/calcfinc_tour.ipynb` (with an "Open in Colab" badge), that runs on built-in
+  sample data, including five made-up Indian exchange filings, an optional live Apple download, and a real
+  Indian company: two unmodified public TCS result filings in `examples/data/tcs` (GitHub only; neither the
+  wheel nor the source distribution carries them). The test suite runs everything except the live Apple cells.
+
+### Changed
+
+- The release workflow now goes build, TestPyPI, an install check from TestPyPI, a manual approval, and
+  then PyPI.
+- README reworked around a real Apple example and a real TCS example, each with its audit trail.
+- The SEC download guidance in the docs now says what the SEC actually says (it asks automated clients to declare
+  a real contact and "manages" those that do not), not that requests are refused.
+- Ruff checks notebooks too; the source distribution leaves out the third-party TCS sample filings.
+
 ## 0.1.1 - 2026-10-09
 
 Fixes found by a live provenance test, three rounds of code review, and live runs on six more real
