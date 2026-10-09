@@ -239,11 +239,11 @@ _r("fcf_yield", "pct", "100 * free_cash_flow / market_cap", "Free cash flow yiel
 # returns, margins, efficiency
 # --------------------------------------------------------------------------- #
 _r("roe", "pct", "100 * net_profit / total_equity", "Return on equity (period-end equity)",
-   aliases=("return_on_equity", "roe_pct"))
+   aliases=("return_on_equity", "roe_pct"), requires_positive=("total_equity",), version=2)
 _r("roa", "pct", "100 * net_profit / total_assets", "Return on assets (period-end assets)",
    aliases=("return_on_assets", "roa_pct"))
 _r("roe_avg", "pct", "100 * net_profit / ((total_equity + prior(total_equity)) / 2)",
-   "Return on average equity")
+   "Return on average equity", requires_positive=("total_equity", "prior(total_equity)"), version=2)
 _r("roa_avg", "pct", "100 * net_profit / ((total_assets + prior(total_assets)) / 2)",
    "Return on average assets (the basis banking regulators use for banks)")
 _r("roce", "pct", "100 * ebit / (total_assets - current_liabilities)",
@@ -257,7 +257,8 @@ _r("net_profit_margin", "pct", "100 * net_profit / top_line", "Net profit margin
 _r("pbt_margin", "pct", "100 * pbt / revenue", "Profit-before-tax margin")
 _r("effective_tax_rate", "pct", "100 * tax_expense / pbt", "Effective tax rate")
 _r("asset_turnover", "x", "top_line / total_assets", "Asset turnover")
-_r("equity_multiplier", "x", "total_assets / total_equity", "Equity multiplier")
+_r("equity_multiplier", "x", "total_assets / total_equity", "Equity multiplier",
+   requires_positive=("total_equity",), version=2)
 _r("incremental_net_margin", "pct",
    "100 * (net_profit - prior(net_profit)) / (top_line - prior(top_line))",
    "Change in net profit per unit of change in top line")
@@ -296,10 +297,12 @@ _r("cash_conversion_cycle", "days", "dso + dio - dpo", "Cash conversion cycle (D
 _r("current_ratio", "x", "current_assets / current_liabilities", "Current ratio")
 _r("cash_ratio", "x", "cash_and_equivalents / current_liabilities", "Cash ratio")
 _r("debt_to_equity", "x", "total_debt / total_equity", "Debt / equity",
-   aliases=("de", "d/e", "leverage"))
+   aliases=("de", "d/e", "leverage"), requires_positive=("total_equity",), version=2)
 _r("debt_to_assets", "x", "total_debt / total_assets", "Debt / assets")
-_r("debt_to_capital", "x", "total_debt / (total_debt + total_equity)", "Debt / (debt + equity)")
-_r("net_debt_to_equity", "x", "net_debt / total_equity", "Net debt / equity")
+_r("debt_to_capital", "x", "total_debt / (total_debt + total_equity)", "Debt / (debt + equity)",
+   requires_positive=("total_equity",), version=2)
+_r("net_debt_to_equity", "x", "net_debt / total_equity", "Net debt / equity",
+   requires_positive=("total_equity",), version=2)
 _r("net_debt_to_ebitda", "x", "net_debt / ebitda", "Net debt / EBITDA",
    requires_positive=("ebitda",))
 _r("debt_to_ebitda", "x", "total_debt / ebitda", "Debt / EBITDA", requires_positive=("ebitda",))
@@ -322,7 +325,8 @@ _r("ebit_ttm", "currency", "ttm(ebit)", "EBIT, trailing twelve months")
 _r("ebitda_ttm", "currency", "ttm(ebitda)", "EBITDA, trailing twelve months")
 _r("free_cash_flow_ttm", "currency", "ttm(free_cash_flow)", "Free cash flow, trailing twelve months")
 _r("eps_ttm", "per_share", "ttm(eps)", "EPS, trailing twelve months (the sum of each period's EPS)")
-_r("roe_ttm", "pct", "100 * ttm(net_profit) / total_equity", "Return on equity on trailing-twelve-month profit")
+_r("roe_ttm", "pct", "100 * ttm(net_profit) / total_equity", "Return on equity on trailing-twelve-month profit",
+   requires_positive=("total_equity",), version=2)
 _r("roa_ttm", "pct", "100 * ttm(net_profit) / total_assets", "Return on assets on trailing-twelve-month profit")
 _r("roce_ttm", "pct", "100 * ttm(ebit) / (total_assets - current_liabilities)",
    "Return on capital employed on trailing-twelve-month EBIT")

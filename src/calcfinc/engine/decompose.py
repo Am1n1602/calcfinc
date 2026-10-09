@@ -57,16 +57,17 @@ def dupont_roe_5(ev: Evaluator) -> dict[str, Any]:
 
 
 def net_margin_bridge(prev: Evaluator, curr: Evaluator) -> dict[str, Any]:
-    """Change in net margin (pp) split into a revenue-growth effect and an expense-growth
-    effect, holding the other side at the prior period."""
+    """Change in net margin (pp) split into a revenue-growth effect and an effect of everything else
+    (expenses, tax and other items). The revenue effect holds every cost at its prior amount, so
+    prior profit plus the revenue change is the profit; with revenue unchanged it is exactly 0."""
     rp, rc = prev.value("top_line").value, curr.value("top_line").value
-    ep, ec = prev.rec.get("total_expenses"), curr.rec.get("total_expenses")
+    ep, ec = prev.rec.get("total_expenses"), curr.rec.get("total_expenses")   # required, not used in the maths
     npp, npc = prev.rec.get("net_profit"), curr.rec.get("net_profit")
     if None in (rp, rc, ep, ec, npp, npc) or not rp or not rc:
         return {"available": False}
     margin_prev = div(mul(HUNDRED, npp), rp)
     margin_curr = div(mul(HUNDRED, npc), rc)
-    margin_rev_only = div(mul(HUNDRED, sub(rc, ep)), rc)     # revenue moved, expenses held at prior
+    margin_rev_only = div(mul(HUNDRED, sub(add(npp, rc), rp)), rc)    # revenue moved, all costs held at prior
     return {
         "available": True,
         "net_margin_prev_pct": margin_prev,

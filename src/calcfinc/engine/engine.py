@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from calcfinc.engine import decompose, growth
 from calcfinc.engine.check import ABS_TOL, REL_TOL, CheckResult, check_values, quarters_add_up
@@ -27,8 +27,6 @@ from calcfinc.registry import metrics as _metrics
 from calcfinc.registry import ratios
 from calcfinc.registry.ratios import PERIOD_DAYS, RatioSpec
 from calcfinc.store.base import PRICE_WINDOW_DAYS, AmbiguousEntity
-
-_CURRENCY_UNITS = frozenset({"currency", "per_share"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +111,38 @@ def _flag_limits(rec: PeriodRecord, used: Sequence[str]) -> tuple[str, ...]:
             + tuple(f"{m}: {rec.info_notes[m]}" for m in used if m in rec.info_notes))
 
 
-VINTAGE_DAYS = 120       # inputs of one period first reported further apart than this were not filed together
+class _Point(NamedTuple):
+    """One period's value of a metric, with the facts it came from."""
+
+    rec: PeriodRecord
+    value: Decimal | None
+    leaves: tuple[FactRef, ...]
+
+
+def _dedupe(refs: tuple[FactRef, ...]) -> tuple[FactRef, ...]:
+    return tuple(dict.fromkeys(refs))
+
+
+def _leaf_flags(records: Sequence[PeriodRecord], leaves: Sequence[FactRef]) -> tuple[str, ...]:
+    """Review flags and derivation notes for each input fact, read from the record of the period
+    that fact belongs to (an input may come from an earlier period, through prior() or ttm())."""
+    by_label: dict[str, list[PeriodRecord]] = {}
+    for r in records:
+        by_label.setdefault(r.label, []).append(r)     # labels are not guaranteed unique: keep every match
+    notes: list[str] = []
+    for leaf in leaves:
+        for rec in by_label.get(leaf.period or "", ()):
+            notes.extend(_flag_limits(rec, [leaf.metric]))
+    return tuple(dict.fromkeys(notes))
+
+
+def _point_notes(records: Sequence[PeriodRecord], *points: _Point) -> tuple[str, ...]:
+    """Review flags, derivation notes and mixed-vintage warnings for the facts behind a comparison."""
+    leaves = tuple(leaf for p in points for leaf in p.leaves)
+    return tuple(dict.fromkeys(_leaf_flags(records, leaves) + _vintage_note(leaves)))
+
+
+VINTAGE_DAYS = 120      # inputs of one period first reported further apart than this were not filed together
 
 
 def _vintage_note(leaves: Sequence[FactRef]) -> tuple[str, ...]:
@@ -165,11 +194,13 @@ class FinancialEngine:
         self._windows = windows
         self._cache: dict[tuple[int, str], list[PeriodRecord]] = {}
         self._inferred: dict[int, str | None] = {}         # id(records) -> sector inferred from the facts
+        self._positions: dict[int, dict[int, int]] = {}    # id(records) -> {id(record): index}
         self._segments = SegmentEngine(repos)
 
     def refresh(self) -> None:
         self._cache.clear()
         self._inferred.clear()
+        self._positions.clear()
 
     @property
     def repos(self) -> Any:
@@ -266,13 +297,27 @@ class FinancialEngine:
                 return r
         return None
 
+    def _position(self, records: list[PeriodRecord], rec: PeriodRecord) -> int:
+        """Index of `rec` in `records` by identity (a list.index would compare records field by field)."""
+        table = self._positions.get(id(records))
+        if table is None:
+            table = self._positions[id(records)] = {id(r): i for i, r in enumerate(records)}
+        return table[id(rec)]
+
+    def _consecutive(self, earlier: PeriodRecord, later: PeriodRecord, window: str) -> bool:
+        """Do two period ends lie one `window` ('year', 'quarter', 'month') apart? Unknown dates pass."""
+        if earlier.period_end is None or later.period_end is None:
+            return True
+        lo, hi = getattr(self._windows, window)
+        return bool(lo <= (later.period_end - earlier.period_end).days <= hi)
+
     def _prior(self, records: list[PeriodRecord], rec: PeriodRecord) -> PeriodRecord | None:
         """The record one comparable period earlier: same period type, and adjacent -- a gap
         is not a prior period, so prior(x) is then unavailable rather than wrong."""
         if rec.period_type is None or rec.period_end is None:
             return None
         lo, hi = getattr(self._windows, rec.period_type)
-        for r in reversed(records[:records.index(rec)]):
+        for r in (records[j] for j in range(self._position(records, rec) - 1, -1, -1)):
             if r.period_type == rec.period_type and r.is_annual == rec.is_annual and r.period_end:
                 return r if lo <= (rec.period_end - r.period_end).days <= hi else None
         return None
@@ -286,7 +331,7 @@ class FinancialEngine:
                           f"but {rec.label} is none of these")
         lo, hi = getattr(self._windows, rec.period_type or "year")
         chain = [rec]
-        for r in reversed(records[:records.index(rec)]):
+        for r in (records[j] for j in range(self._position(records, rec) - 1, -1, -1)):
             if len(chain) == n:
                 break
             if r.period_type == rec.period_type and r.is_annual == rec.is_annual and r.period_end:
@@ -362,8 +407,7 @@ class FinancialEngine:
                                 definition_version=spec.version, limitations=(why,))
         ev, out = run(rec)
         assert out.value is not None
-        cur = next(iter(out.currencies), None) if spec.unit in _CURRENCY_UNITS else None
-        used = [leaf.metric for leaf in out.leaves]
+        cur = next(iter(out.currencies), None) if spec.unit in _metrics.CURRENCY_KINDS else None
         comps: dict[str, Any] = {}
         if price_dep and ev.price is not None:
             comps = {"share_price": ev.price.close, "price_date": ev.price.price_date.isoformat()}
@@ -372,17 +416,27 @@ class FinancialEngine:
             entity=ent.name, basis=rec.basis, period=rec.label, formula=out.formula or spec.formula,
             inputs=out.leaves, components=comps, currency=cur, definition_version=spec.version,
             limitations=((stale,) if stale else ()) + out.notes
-            + (() if ttm else _flow_stock_note(rec, spec.name, out.leaves)) + _flag_limits(rec, used)
+            + (() if ttm else _flow_stock_note(rec, spec.name, out.leaves)) + _leaf_flags(records, out.leaves)
             + _vintage_note(out.leaves))
+
+    def _outcome_in(self, ent: Entity, records: list[PeriodRecord], rec: PeriodRecord, name: str) -> Outcome:
+        """The value of a reported metric, derived quantity or ratio in one period, with the facts it
+        came from. A ratio reports the facts it was computed from, never a stand-in for itself."""
+        spec = ratios.get_spec(name)
+        if spec is None:
+            key = name.strip()
+            v = rec.get(key)
+            if not isinstance(v, Decimal):
+                return Outcome(None, f"{key} not reported")
+            cur = rec.currencies.get(key)
+            ref = FactRef(key, v, rec.label, rec.sources.get(key), cur, rec.reported.get(key))
+            return Outcome(v, leaves=(ref,), currencies=frozenset({cur}) if cur else frozenset())
+        ev = self._evaluator(ent, records, rec, with_price=ratios.needs_price(spec.name))
+        return ev.value(spec.name)
 
     def _value_in(self, ent: Entity, records: list[PeriodRecord], rec: PeriodRecord,
                   name: str) -> Decimal | None:
-        spec = ratios.get_spec(name)
-        if spec is None:
-            v = rec.get(name.strip())
-            return v if isinstance(v, Decimal) else None
-        ev = self._evaluator(ent, records, rec, with_price=ratios.needs_price(spec.name))
-        return ev.value(spec.name).value
+        return self._outcome_in(ent, records, rec, name).value
 
     # ------------------------------------------------------------------ #
     # API
@@ -436,7 +490,7 @@ class FinancialEngine:
         return self._formula_result("valuation", ent, spec, basis, period, fallback)
 
     def _series(self, ent: Entity, records: list[PeriodRecord], metric: str,
-                *, only: str) -> list[tuple[PeriodRecord, Decimal]]:
+                *, only: str) -> list[_Point]:
         out = []
         for r in records:
             if only == "annual" and not r.is_annual:
@@ -445,9 +499,9 @@ class FinancialEngine:
                 continue
             if only == "month" and r.period_type != "month":
                 continue
-            v = self._value_in(ent, records, r, metric)
-            if v is not None:
-                out.append((r, v))
+            o = self._outcome_in(ent, records, r, metric)
+            if o.value is not None:
+                out.append(_Point(r, o.value, o.leaves))
         return out
 
     def get_growth(self, entity: str | Entity, metric: str, *, kind: str = "yoy",
@@ -464,38 +518,44 @@ class FinancialEngine:
             series = self._series(ent, records, metric, only=unit_kind)
             if len(series) < 2:
                 return _with_limit(base, f"need >=2 {unit_kind}ly periods with {metric}")
-            (rp, vp), (rc, vc) = series[-2], series[-1]
+            prev, curr = series[-2], series[-1]
         elif kind == "yoy":
             annual = self._series(ent, records, metric, only="annual")
             if len(annual) >= 2:
-                (rp, vp), (rc, vc) = annual[-2], annual[-1]
+                prev, curr = annual[-2], annual[-1]
             else:
                 q = self._series(ent, records, metric, only="quarter")
                 m = [] if q else self._series(ent, records, metric, only="month")
                 latest = q or m
                 if not latest:
                     return _with_limit(base, f"no periods with {metric}")
-                rc, vc = latest[-1]
-                match = [(r, v) for r, v in latest
-                         if (q and r.quarter == rc.quarter and r.financial_year == (rc.financial_year or 0) - 1)
-                         or (m and r.period_end and rc.period_end and r.period_end.month == rc.period_end.month
-                             and r.period_end.year == rc.period_end.year - 1)]
+                curr = latest[-1]
+                rc = curr.rec
+                match = [p for p in latest
+                         if (q and p.rec.quarter == rc.quarter and p.rec.financial_year == (rc.financial_year or 0) - 1)
+                         or (m and p.rec.period_end and rc.period_end and p.rec.period_end.month == rc.period_end.month
+                             and p.rec.period_end.year == rc.period_end.year - 1)]
                 if not match:
                     return _with_limit(base, f"need two comparable annual periods, or {metric} "
                                              "for the same period of the prior year")
-                rp, vp = match[-1]
+                prev = match[-1]
         else:
             return _with_limit(base, f"unknown growth kind {kind!r} (use 'yoy', 'qoq' or 'mom')")
 
+        rp, vp, rc, vc = prev.rec, prev.value, curr.rec, curr.value
+        assert vp is not None and vc is not None             # a series holds only periods with a value
+        if not self._consecutive(rp, rc, {"yoy": "year", "qoq": "quarter", "mom": "month"}[kind]):
+            return _with_limit(base, f"{rp.label} and {rc.label} are not consecutive {kind} periods, so no "
+                                     f"{kind} growth is given (compare_periods compares any two)")
         return EngineResult(
             "growth", f"{metric}_{kind}", growth.pct_change(vp, vc), unit="pct", entity=ent.name,
             basis=Basis(basis).value, period=f"{rp.label} -> {rc.label}",
             formula="100 * (curr - prev) / prev",
-            inputs=(FactRef(metric, vp, rp.label, None), FactRef(metric, vc, rc.label, None)),
+            inputs=_dedupe(prev.leaves + curr.leaves),
             components={"abs_change": growth.abs_change(vp, vc), "from": rp.label, "to": rc.label,
                         "from_value": vp, "to_value": vc},
-            limitations=() if vp > ZERO else ("prior value <= 0; % change not meaningful, "
-                                              "see components.abs_change",))
+            limitations=(() if vp > ZERO else ("prior value <= 0; % change not meaningful, "
+                                               "see components.abs_change",)) + _point_notes(records, prev, curr))
 
     def get_cagr(self, entity: str | Entity, metric: str, *, basis: Basis | str = "consolidated",
                  years: Num | None = None) -> EngineResult:
@@ -507,7 +567,9 @@ class FinancialEngine:
                             basis=Basis(basis).value)
         if len(annual) < 2:
             return _with_limit(base, f"need >=2 annual periods with {metric}")
-        (rp, vp), (rc, vc) = annual[0], annual[-1]
+        first, last = annual[0], annual[-1]
+        rp, vp, rc, vc = first.rec, first.value, last.rec, last.value
+        assert vp is not None and vc is not None
         if years is not None:
             span = to_decimal(years)
         elif rc.financial_year and rp.financial_year:
@@ -518,9 +580,12 @@ class FinancialEngine:
             "cagr", f"{metric}_cagr", growth.cagr(vp, vc, span), unit="pct", entity=ent.name,
             basis=Basis(basis).value, period=f"{rp.label} -> {rc.label}",
             formula="((end / start) ** (1 / years) - 1) * 100",
-            inputs=(FactRef(metric, vp, rp.label, None), FactRef(metric, vc, rc.label, None)),
+            inputs=_dedupe(first.leaves + last.leaves),
             components={"years": span, "start_value": vp, "end_value": vc},
-            limitations=() if vp > ZERO else ("start value <= 0; CAGR undefined",))
+            limitations=(("start value <= 0; CAGR undefined",) if vp <= ZERO else ())
+            + (("end value <= 0; CAGR undefined",) if vc <= ZERO else ())
+            + (("years must be positive; CAGR undefined",) if span <= ZERO else ())
+            + _point_notes(records, first, last))
 
     def compare_periods(self, entity: str | Entity, metrics: str | Sequence[str], *,
                         basis: Basis | str = "consolidated", a: Any, b: Any) -> EngineResult:
@@ -532,14 +597,19 @@ class FinancialEngine:
             return EngineResult("comparison", "compare_periods", None, entity=ent.name,
                                 basis=Basis(basis).value,
                                 limitations=(f"could not resolve period(s): a={a!r} b={b!r}",))
-        comp = {}
+        comp: dict[str, Any] = {}
+        inputs: list[FactRef] = []
+        notes: list[str] = []
         for m in ([metrics] if isinstance(metrics, str) else list(metrics)):
-            va = self._value_in(ent, records, ra, m)
-            vb = self._value_in(ent, records, rb, m)
-            comp[m] = {"from": va, "to": vb, "abs_change": growth.abs_change(va, vb),
-                       "pct_change": growth.pct_change(va, vb)}
+            oa, ob = self._outcome_in(ent, records, ra, m), self._outcome_in(ent, records, rb, m)
+            refs = _dedupe(oa.leaves + ob.leaves)          # only this metric's own facts
+            comp[m] = {"from": oa.value, "to": ob.value, "abs_change": growth.abs_change(oa.value, ob.value),
+                       "pct_change": growth.pct_change(oa.value, ob.value), "inputs": refs}
+            inputs.extend(refs)
+            notes.extend(_point_notes(records, _Point(ra, oa.value, oa.leaves), _Point(rb, ob.value, ob.leaves)))
         return EngineResult("comparison", "compare_periods", None, entity=ent.name,
-                            basis=Basis(basis).value, period=f"{ra.label} -> {rb.label}", components=comp)
+                            basis=Basis(basis).value, period=f"{ra.label} -> {rb.label}", components=comp,
+                            inputs=_dedupe(tuple(inputs)), limitations=tuple(dict.fromkeys(notes)))
 
     def compare_companies(self, metric: str, entities: Sequence[str | Entity], *,
                           basis: Basis | str = "consolidated", period: Any = "latest") -> dict[str, Any]:
@@ -548,7 +618,7 @@ class FinancialEngine:
         spec = ratios.get_spec(metric)
         is_ratio = spec is not None
         reg = _metrics.get(metric.strip())
-        absolute = (spec.unit in _CURRENCY_UNITS) if spec else bool(reg and reg.kind in _metrics.CURRENCY_KINDS)
+        absolute = (spec.unit in _metrics.CURRENCY_KINDS) if spec else bool(reg and reg.kind in _metrics.CURRENCY_KINDS)
         results: list[dict[str, Any]] = []
         missing: list[dict[str, Any]] = []
         unit = None
@@ -565,6 +635,10 @@ class FinancialEngine:
             else:
                 results.append({"entity": r.entity, "value": r.value, "currency": r.currency, "period": r.period})
         limitations: list[str] = []
+        periods = sorted({str(row["period"]) for row in results})
+        if len(periods) > 1:
+            limitations.append(f"entities are compared on different periods ({', '.join(periods)}); "
+                               "pass period= to compare the same one")
         currencies = {row["currency"] for row in results if row["currency"]}
         if absolute and len(currencies) > 1:
             limitations.append(f"amounts are in different currencies ({', '.join(sorted(currencies))}); "
@@ -620,11 +694,18 @@ class FinancialEngine:
                 return EngineResult("decomposition", "net_margin_bridge", None, entity=ent.name, basis=b,
                                     limitations=("need two comparable periods with top line, "
                                                  "total_expenses and net_profit",))
+            if not self._consecutive(seq[-2], seq[-1], "year" if seq is annual else "quarter"):
+                return EngineResult("decomposition", "net_margin_bridge", None, entity=ent.name, basis=b,
+                                    limitations=(f"{seq[-2].label} and {seq[-1].label} are not consecutive "
+                                                 "periods, so no bridge is given",))
             d = decompose.net_margin_bridge(self._evaluator(ent, records, seq[-2]),
                                             self._evaluator(ent, records, seq[-1]))
             return EngineResult("decomposition", "net_margin_bridge", d.get("net_margin_change_pp"),
                                 unit="pp", entity=ent.name, basis=b,
-                                period=f"{seq[-2].label} -> {seq[-1].label}", components=d)
+                                period=f"{seq[-2].label} -> {seq[-1].label}", components=d,
+                                limitations=() if d.get("available") else (
+                                    "net margin bridge unavailable: a period's top line, total_expenses or "
+                                    "net_profit is missing, or a top line is zero",))
         return EngineResult("decomposition", key, None, entity=ent.name, basis=b,
                             limitations=(f"no decomposition for {metric!r}; try 'roe', 'dupont5' or "
                                          "'net_margin'",))

@@ -12,6 +12,7 @@ from calcfinc.engine.growth import abs_change, pct_change
 from calcfinc.entity import Entity
 from calcfinc.fact import Basis, SegmentFact
 from calcfinc.num import HUNDRED, ZERO, div, dsum, mul
+from calcfinc.period import DEFAULT_WINDOWS
 from calcfinc.store.base import AmbiguousEntity
 
 
@@ -140,16 +141,24 @@ class SegmentEngine:
             return SegmentResult("segment_growth", str(entity), Basis(basis).value, None, (),
                                  limitations=(why or "unknown entity",))
         assert ent.id is not None
+        if kind not in ("yoy", "qoq"):
+            return SegmentResult("segment_growth", ent.name, Basis(basis).value, None, (),
+                                 limitations=(f"unknown growth kind {kind!r} (use 'yoy' or 'qoq')",))
         facts = self._revenue_facts(ent.id, basis)
         only_annual = [f for f in facts if f.is_annual]
         only_qtr = [f for f in facts if f.quarter is not None]
-        series = only_annual if kind == "yoy" and only_annual else only_qtr
+        series = only_annual if kind == "yoy" else only_qtr
 
         ends = sorted({f.period_end for f in series if f.period_end})
         if len(ends) < 2:
             return SegmentResult("segment_growth", ent.name, Basis(basis).value, None, (),
                                  limitations=(f"need two comparable periods of segment revenue for {ent.name}",))
         prev_end, curr_end = ends[-2], ends[-1]
+        lo, hi = DEFAULT_WINDOWS.year if series is only_annual else DEFAULT_WINDOWS.quarter
+        if not lo <= (curr_end - prev_end).days <= hi:
+            return SegmentResult("segment_growth", ent.name, Basis(basis).value, None, (),
+                                 limitations=(f"{prev_end} and {curr_end} are not consecutive periods, so no "
+                                              "segment growth is given",))
         used = [f for f in series if f.period_end in (prev_end, curr_end)]
         currency, cur_notes = _currency(used)
         if cur_notes:

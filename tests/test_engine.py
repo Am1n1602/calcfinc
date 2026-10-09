@@ -62,7 +62,7 @@ class TestEngine(unittest.TestCase):
         self.assertIsNone(r.currency)                                              # a ratio has no currency
         self.assertIn("net_profit", [i.metric for i in r.inputs])
         self.assertEqual(r.formula, "100 * net_profit / total_equity")
-        self.assertEqual(r.definition_version, 1)
+        self.assertEqual(r.definition_version, 2)        # 2: refuses non-positive equity
 
     def test_unknown_ratio(self):
         r = self.eng.get_ratio("TEST", "sharpe_ratio")

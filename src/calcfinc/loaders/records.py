@@ -168,6 +168,8 @@ def load_records(repos: Any, rows: Iterable[Mapping[str, Any]], *, entity: str |
                 ent = repos.entities.upsert(Entity(name=name, kind=entity_kind, currency=cur,
                                                    fiscal_year_end_month=fye, sector=sector))
                 created.append(name)
+            elif sector is not None and ent.sector != sector.strip().lower():
+                ent = repos.entities.upsert(replace(ent, sector=sector))     # a sector you declare is applied
             ids[name] = int(ent.id or 0)
         default_source = repos.sources.add(source).source_id if source is not None else None
         row_sources: dict[str, int | None] = {}

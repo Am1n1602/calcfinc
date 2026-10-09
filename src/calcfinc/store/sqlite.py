@@ -59,8 +59,21 @@ def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
     return conn
 
 
+SCHEMA_VERSION = 1       # stored in the file (PRAGMA user_version); raise it with each migration below
+
+
 def init_db(conn: sqlite3.Connection) -> None:
+    """Create the tables if absent and bring an older file up to SCHEMA_VERSION. CREATE TABLE IF NOT
+    EXISTS cannot add a column to an existing table, so each schema change needs a step here."""
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if version > SCHEMA_VERSION:
+        raise ValueError(f"this database was written by a newer calcfinc (schema {version}; this version "
+                         f"reads up to {SCHEMA_VERSION}); upgrade calcfinc to open it")
     conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
+    # schema 1 added entities.sector; files made before it (version 0, with an entities table) lack it
+    if "sector" not in {r[1] for r in conn.execute("PRAGMA table_info(entities)")}:
+        conn.execute("ALTER TABLE entities ADD COLUMN sector TEXT")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
 
@@ -221,26 +234,42 @@ class SqliteFactRepository:
                              "entity a default currency")
         return replace(f, currency=cur)
 
+    def _stored_values(self, pairs: set[tuple[int, str]]) -> dict[tuple[Any, ...], Decimal]:
+        """Stored values of the given (entity, metric) pairs, keyed like the upsert's grain."""
+        by_entity: dict[int, list[str]] = {}
+        for entity_id, metric in pairs:
+            by_entity.setdefault(entity_id, []).append(metric)
+        out: dict[tuple[Any, ...], Decimal] = {}
+        for entity_id, names in by_entity.items():
+            for i in range(0, len(names), 500):                        # stay under SQLite's variable limit
+                chunk = names[i:i + 500]
+                marks = ", ".join("?" * len(chunk))
+                for r in self._c.execute(
+                        "SELECT metric, basis, statement_type, period_end, period_start, reported_at, value "
+                        f"FROM facts WHERE entity_id = ? AND value IS NOT NULL AND metric IN ({marks})",
+                        (entity_id, *chunk)):
+                    out[(entity_id, r["metric"], r["basis"], r["statement_type"], r["period_end"] or "",
+                         r["period_start"] or "", r["reported_at"] or "")] = to_decimal(r["value"])
+        return out
+
     def add_many(self, facts: Iterable[FinancialFact]) -> int:
         """Upserts on the (entity, metric, basis, statement_type, period, reported_at) grain.
         Overwriting a value at the same grain with a materially different one is logged: it is
         a plain overwrite, not a precedence decision, so a source conflict stays visible."""
         defaults: dict[int, str | None] = {}
+        batch = [self._with_currency(raw, defaults) for raw in facts]
+        known = self._stored_values({(f.entity_id, f.metric) for f in batch})   # only what this batch can touch
         n = 0
-        for raw in facts:
-            f = self._with_currency(raw, defaults)
+        for f in batch:
             key = (f.entity_id, f.metric, f.basis.value, f.statement_type.value,
                    _ds(f.period_end) or "", _ds(f.period_start) or "", _ds(f.reported_at) or "")
             if f.value is not None:
-                old_row = self._c.execute(
-                    "SELECT value FROM facts WHERE entity_id = ? AND metric = ? AND basis = ? "
-                    "AND statement_type = ? AND COALESCE(period_end, '') = ? "
-                    "AND COALESCE(period_start, '') = ? AND COALESCE(reported_at, '') = ?", key).fetchone()
-                old = _vd(old_row["value"]) if old_row else None
+                old = known.get(key)
                 if old is not None and abs(old - f.value) > max(_OVERWRITE_ABS, abs(old) * _OVERWRITE_REL):
                     _log.warning("facts overwrite changes value: entity_id=%s metric=%s basis=%s "
                                  "period=%s..%s old=%s new=%s", f.entity_id, f.metric, f.basis.value,
                                  f.period_start, f.period_end, old, f.value)
+                known[key] = f.value
             self._c.execute(
                 "INSERT INTO facts (entity_id, metric, value, currency, period_start, period_end, "
                 "financial_year, quarter, statement_type, basis, is_annual, is_point_in_time, "
@@ -250,7 +279,8 @@ class SqliteFactRepository:
                 ":reported_at, :source_id, :mapping_confidence, :mapping_reason) "
                 "ON CONFLICT (entity_id, metric, basis, statement_type, COALESCE(period_end, ''), "
                 "COALESCE(period_start, ''), COALESCE(reported_at, '')) DO UPDATE SET "
-                "value = excluded.value, currency = excluded.currency, "
+                "value = COALESCE(excluded.value, facts.value), "
+                "currency = CASE WHEN excluded.value IS NULL THEN facts.currency ELSE excluded.currency END, "
                 "financial_year = excluded.financial_year, quarter = excluded.quarter, "
                 "is_annual = excluded.is_annual, is_point_in_time = excluded.is_point_in_time, "
                 "source_id = COALESCE(excluded.source_id, facts.source_id), "
@@ -389,7 +419,11 @@ class SqliteRepositories:
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         self._conn = connect(path)
-        init_db(self._conn)
+        try:
+            init_db(self._conn)
+        except BaseException:
+            self._conn.close()
+            raise
         self.entities = SqliteEntityRepository(self._conn)
         self.sources = SqliteSourceRepository(self._conn)
         self.facts = SqliteFactRepository(self._conn)

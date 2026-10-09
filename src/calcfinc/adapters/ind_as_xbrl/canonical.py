@@ -25,7 +25,7 @@ from calcfinc.adapters.ind_as_xbrl.tags import (
     TAG_MAP,
     is_primary_context,
 )
-from calcfinc.num import HUNDRED, add, div, mul, sub
+from calcfinc.num import HUNDRED, add, div, mul, sub, to_decimal
 
 _MISSING = {"", "-", "—", "NA", "N/A"}
 
@@ -38,22 +38,30 @@ def parse_number(raw: object) -> Decimal | None:
     if raw is None or isinstance(raw, bool):
         return None
     if isinstance(raw, Decimal):
-        return raw if raw.is_finite() else None
+        return _supported(raw)
     if isinstance(raw, int):
-        return Decimal(raw)
+        return _supported(Decimal(raw))
     s = repr(raw) if isinstance(raw, float) else str(raw).strip()
     if s in _MISSING:
         return None
     negative = s.startswith("(") and s.endswith(")")
     s = s.strip("()").replace(",", "").replace("₹", "").strip()
-    for candidate in (s, "".join(c for c in s if c.isdigit() or c in ".-")):
+    for candidate in (s, s.rstrip("*†‡#^ ")):                # a footnote marker after the number, nothing else
         try:
             value = Decimal(candidate)
         except InvalidOperation:
             continue
         if value.is_finite():
-            return -value if negative else value
+            return _supported(-value if negative else value)
     return None
+
+
+def _supported(value: Decimal) -> Decimal | None:
+    """The value if the library can hold it (at most 34 digits, exponent within +/-999), else None."""
+    try:
+        return to_decimal(value)
+    except ValueError:
+        return None
 
 
 def _tag_index() -> tuple[dict[str, str], dict[str, str]]:
@@ -139,6 +147,12 @@ def drop_placeholder_zeros(record: Mapping[str, Any]) -> tuple[dict[str, Any], l
         dropped += [k for k in BANK_REGULATORY if isinstance(record.get(k), Decimal)]
     dropped += [k for k in ZERO_IS_MISSING if isinstance(record.get(k), Decimal) and record[k] == 0
                 and k not in dropped]
+    # Profit to owners plus profit to minorities is the profit, so both being exactly 0 beside a
+    # non-zero profit is a placeholder (seen in a real annual filing whose quarters were not 0).
+    profit, owners, minorities = (record.get(k) for k in ("net_profit", "net_profit_owners", "net_profit_nci"))
+    if (isinstance(profit, Decimal) and profit != 0 and isinstance(owners, Decimal) and owners == 0
+            and isinstance(minorities, Decimal) and minorities == 0):
+        dropped += [k for k in ("net_profit_owners", "net_profit_nci") if k not in dropped]
     for k in dropped:
         out.pop(k, None)
     return out, dropped

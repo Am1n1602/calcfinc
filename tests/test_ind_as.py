@@ -353,6 +353,20 @@ class TestRealWorldQuirks(unittest.TestCase):
                                             net_profit_nci=0, borrowings_noncurrent=0, revenue=1000)], entity="X")
         self.assertTrue(self.names() >= {"exceptional_items", "net_profit_nci", "borrowings_noncurrent"})
 
+    def test_zero_profit_split_beside_a_real_profit_is_a_placeholder(self):
+        # owners 0 + minorities 0 cannot add up to a profit of 3,995: seen in a real annual filing
+        ind.load_canonical(self.repos, [
+            rec("OneD", "2024-01-01", "2024-03-31", net_profit=3995, net_profit_owners=0, net_profit_nci=0)],
+            entity="HCL")
+        self.assertEqual(self.names() & {"net_profit_owners", "net_profit_nci"}, set())
+        self.assertIn("net_profit", self.names())
+
+    def test_a_genuine_zero_minority_share_is_kept_when_owners_take_the_whole_profit(self):
+        ind.load_canonical(self.repos, [
+            rec("OneD", "2024-01-01", "2024-03-31", net_profit=3995, net_profit_owners=3995, net_profit_nci=0)],
+            entity="HCL")
+        self.assertTrue(self.names() >= {"net_profit_owners", "net_profit_nci"})
+
     def test_zero_paid_up_capital_is_missing_so_the_other_context_supplies_the_share_count(self):
         # one context reports 0 for paid-up capital (no data), the other the real figure
         ind.load_canonical(self.repos, [

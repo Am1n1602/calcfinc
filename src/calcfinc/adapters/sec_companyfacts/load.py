@@ -45,17 +45,21 @@ def load_companyfacts(repos: Any, data: Mapping[str, Any], *, ticker: str | None
                       fiscal_year_end_month: int | None = None, forms: Collection[str] = DEFAULT_FORMS,
                       windows: PeriodWindows = DEFAULT_WINDOWS) -> SecReport:
     """Load one company. The entity is found by its CIK (or `ticker`); a new one is created with
-    the CIK as an identifier, the filer's currency and the inferred fiscal year end. An existing
-    entity keeps its own fiscal year end."""
+    the CIK as an identifier, the filer's currency and the fiscal year end. The year end is the
+    `fiscal_year_end_month` you pass, else the one inferred from the filings; an existing entity is
+    brought to it (its stored value may be only the constructor default, which says nothing). If the
+    filings have no full-year figures, nothing is inferred and an existing entity keeps its value."""
     cik = str(data.get("cik", "")).strip().zfill(10)
     ent = repos.entities.resolve(cik) or (repos.entities.resolve(ticker) if ticker else None)
-    fye = ent.fiscal_year_end_month if ent else fiscal_year_end_month
-    parsed: ParsedCompanyFacts = parse_companyfacts(data, fiscal_year_end_month=fye, forms=forms, windows=windows)
+    parsed: ParsedCompanyFacts = parse_companyfacts(data, fiscal_year_end_month=fiscal_year_end_month,
+                                                    forms=forms, windows=windows)
     try:
         if ent is None:
             ids = {"cik": parsed.cik, **({"ticker": ticker} if ticker else {})}
             ent = repos.entities.upsert(Entity(name=parsed.name, identifiers=ids, currency=parsed.currency,
                                                fiscal_year_end_month=parsed.fiscal_year_end_month))
+        elif parsed.year_end_known and ent.fiscal_year_end_month != parsed.fiscal_year_end_month:
+            ent = repos.entities.upsert(replace(ent, fiscal_year_end_month=parsed.fiscal_year_end_month))
         eid = int(ent.id or 0)
         source_ids: dict[str, int | None] = {}
         facts: list[FinancialFact] = []

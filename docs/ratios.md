@@ -34,9 +34,9 @@ A ratio's formula is what the engine evaluates. Inputs are reported metrics (sec
 | `earnings_yield` | percent | `100 * eps / share_price` | Earnings yield |
 | `dividend_yield` | percent | `100 * (abs(dividends) / shares_outstanding) / share_price` | Dividend yield (also `div_yield`) |
 | `fcf_yield` | percent | `100 * free_cash_flow / market_cap` | Free cash flow yield - must be positive: `market_cap` |
-| `roe` | percent | `100 * net_profit / total_equity` | Return on equity (period-end equity) (also `return_on_equity`, `roe_pct`) |
+| `roe` | percent | `100 * net_profit / total_equity` | Return on equity (period-end equity) (also `return_on_equity`, `roe_pct`) - must be positive: `total_equity` |
 | `roa` | percent | `100 * net_profit / total_assets` | Return on assets (period-end assets) (also `return_on_assets`, `roa_pct`) |
-| `roe_avg` | percent | `100 * net_profit / ((total_equity + prior(total_equity)) / 2)` | Return on average equity |
+| `roe_avg` | percent | `100 * net_profit / ((total_equity + prior(total_equity)) / 2)` | Return on average equity - must be positive: `total_equity`, `prior(total_equity)` |
 | `roa_avg` | percent | `100 * net_profit / ((total_assets + prior(total_assets)) / 2)` | Return on average assets (the basis banking regulators use for banks) |
 | `roce` | percent | `100 * ebit / (total_assets - current_liabilities)` | Return on capital employed (also `return_on_capital_employed`, `roce_pct`) |
 | `roic` | percent | `100 * nopat / invested_capital` | Return on invested capital - must be positive: `invested_capital` |
@@ -46,7 +46,7 @@ A ratio's formula is what the engine evaluates. Inputs are reported metrics (sec
 | `pbt_margin` | percent | `100 * pbt / revenue` | Profit-before-tax margin |
 | `effective_tax_rate` | percent | `100 * tax_expense / pbt` | Effective tax rate |
 | `asset_turnover` | times | `top_line / total_assets` | Asset turnover |
-| `equity_multiplier` | times | `total_assets / total_equity` | Equity multiplier |
+| `equity_multiplier` | times | `total_assets / total_equity` | Equity multiplier - must be positive: `total_equity` |
 | `incremental_net_margin` | percent | `100 * (net_profit - prior(net_profit)) / (top_line - prior(top_line))` | Change in net profit per unit of change in top line |
 | `operating_leverage` | times | `(ebit - prior(ebit)) * prior(top_line) / (prior(ebit) * (top_line - prior(top_line)))` | Degree of operating leverage (% change in EBIT / % change in top line) - must be positive: `prior(ebit)` |
 | `payout_ratio` | percent | `100 * abs(dividends) / net_profit` | Dividend payout ratio |
@@ -63,10 +63,10 @@ A ratio's formula is what the engine evaluates. Inputs are reported metrics (sec
 | `cash_conversion_cycle` | days | `dso + dio - dpo` | Cash conversion cycle (DSO + DIO - DPO) (also `ccc`) |
 | `current_ratio` | times | `current_assets / current_liabilities` | Current ratio - not computed for: bank, insurer |
 | `cash_ratio` | times | `cash_and_equivalents / current_liabilities` | Cash ratio - not computed for: bank, insurer |
-| `debt_to_equity` | times | `total_debt / total_equity` | Debt / equity (also `de`, `d/e`, `leverage`) |
+| `debt_to_equity` | times | `total_debt / total_equity` | Debt / equity (also `de`, `d/e`, `leverage`) - must be positive: `total_equity` |
 | `debt_to_assets` | times | `total_debt / total_assets` | Debt / assets |
-| `debt_to_capital` | times | `total_debt / (total_debt + total_equity)` | Debt / (debt + equity) |
-| `net_debt_to_equity` | times | `net_debt / total_equity` | Net debt / equity |
+| `debt_to_capital` | times | `total_debt / (total_debt + total_equity)` | Debt / (debt + equity) - must be positive: `total_equity` |
+| `net_debt_to_equity` | times | `net_debt / total_equity` | Net debt / equity - must be positive: `total_equity` |
 | `net_debt_to_ebitda` | times | `net_debt / ebitda` | Net debt / EBITDA - must be positive: `ebitda` |
 | `debt_to_ebitda` | times | `total_debt / ebitda` | Debt / EBITDA - must be positive: `ebitda` |
 | `equity_to_assets` | percent | `100 * total_equity / total_assets` | Equity / assets |
@@ -84,7 +84,7 @@ A ratio's formula is what the engine evaluates. Inputs are reported metrics (sec
 | `ebitda_ttm` | amount | `ttm(ebitda)` | EBITDA, trailing twelve months |
 | `free_cash_flow_ttm` | amount | `ttm(free_cash_flow)` | Free cash flow, trailing twelve months |
 | `eps_ttm` | per share | `ttm(eps)` | EPS, trailing twelve months (the sum of each period's EPS) |
-| `roe_ttm` | percent | `100 * ttm(net_profit) / total_equity` | Return on equity on trailing-twelve-month profit |
+| `roe_ttm` | percent | `100 * ttm(net_profit) / total_equity` | Return on equity on trailing-twelve-month profit - must be positive: `total_equity` |
 | `roa_ttm` | percent | `100 * ttm(net_profit) / total_assets` | Return on assets on trailing-twelve-month profit |
 | `roce_ttm` | percent | `100 * ttm(ebit) / (total_assets - current_liabilities)` | Return on capital employed on trailing-twelve-month EBIT |
 | `net_profit_margin_ttm` | percent | `100 * ttm(net_profit) / ttm(top_line)` | Net profit margin, trailing twelve months |
@@ -223,7 +223,7 @@ A ratio's formula is what the engine evaluates. Inputs are reported metrics (sec
 
 | Name | Unit | Formula | Meaning |
 |---|---|---|---|
-| `india.roe` | percent | `100 * (net_profit - india.preference_dividend) / ((total_equity + prior(total_equity)) / 2)` | Return on equity, Schedule III form: (profit after tax - preference dividend) / average equity - treated as 0 when not reported: `india.preference_dividend` |
+| `india.roe` | percent | `100 * (net_profit - india.preference_dividend) / ((total_equity + prior(total_equity)) / 2)` | Return on equity, Schedule III form: (profit after tax - preference dividend) / average equity - treated as 0 when not reported: `india.preference_dividend`; must be positive: `total_equity`, `prior(total_equity)` |
 | `india.roa` | percent | `100 * (net_profit + finance_costs) / ((total_assets + prior(total_assets)) / 2)` | Return on assets, ICAI form for assets financed partly by lenders: (profit + interest) / average assets - not computed for: bank |
 | `india.capital_employed` | amount | `(total_equity - india.intangible_assets) + total_debt + india.deferred_tax_liabilities` | Capital employed = tangible net worth + total debt + deferred tax liabilities (Indian rating-agency practice; not confirmed as an MCA or ICAI rule) - treated as 0 when not reported: `india.intangible_assets`, `india.deferred_tax_liabilities` |
 | `india.roce` | percent | `100 * ebit / india.capital_employed` | Return on capital employed on the tangible-net-worth + debt + deferred tax basis - must be positive: `india.capital_employed` |

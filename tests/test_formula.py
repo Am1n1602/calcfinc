@@ -132,9 +132,11 @@ class TestRatios(unittest.TestCase):
         self.assertIn("total_equity not reported", out.reason)
 
     def test_zero_denominator_is_none_with_a_reason(self):
-        out = val({"net_profit": 100, "total_equity": 0}, "roe")
+        out = val({"net_profit": 100, "total_assets": 0}, "roa")           # roe now says "not positive" instead
         self.assertIsNone(out.value)
         self.assertIn("division by zero", out.reason)
+        zero_equity = val({"net_profit": 100, "total_equity": 0}, "roe")
+        self.assertIn("total_equity is not positive (0)", zero_equity.reason)
 
     def test_non_positive_denominators_where_meaningless(self):
         out = val({"net_debt": 5, "pbt_before_exceptional": -10, "depreciation": 1, "other_income": 0,

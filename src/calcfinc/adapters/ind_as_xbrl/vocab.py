@@ -59,7 +59,8 @@ def _ratios() -> None:
     _r("india.roe", "pct",
        "100 * (net_profit - india.preference_dividend) / ((total_equity + prior(total_equity)) / 2)",
        "Return on equity, Schedule III form: (profit after tax - preference dividend) / average equity",
-       optional=("india.preference_dividend",))
+       optional=("india.preference_dividend",), requires_positive=("total_equity", "prior(total_equity)"),
+       version=2)
     _r("india.roa", "pct", "100 * (net_profit + finance_costs) / ((total_assets + prior(total_assets)) / 2)",
        "Return on assets, ICAI form for assets financed partly by lenders: (profit + interest) / average assets")
     _r("india.capital_employed", "currency",

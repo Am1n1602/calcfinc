@@ -12,6 +12,7 @@ SEC fair-access rules (https://www.sec.gov/os/accessing-edgar-data):
 from __future__ import annotations
 
 import gzip
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +37,7 @@ def _urlopen(request: urllib.request.Request) -> tuple[int, Mapping[str, str], b
 
 
 _last_request = [float("-inf")]
+_spacing = threading.Lock()
 
 
 def fetch_companyfacts(cik: int | str, user_agent: str, *, opener: Opener = _urlopen,
@@ -51,10 +53,11 @@ def fetch_companyfacts(cik: int | str, user_agent: str, *, opener: Opener = _url
         raise ValueError(f"cik must be a number, got {cik!r}") from None
     if not 0 < number < 10**10:
         raise ValueError(f"cik must be between 1 and 9999999999, got {cik!r}")
-    wait = MIN_INTERVAL - (clock() - _last_request[0])
-    if wait > 0:
-        sleep(wait)
-    _last_request[0] = clock()
+    with _spacing:                       # callers on several threads queue here, MIN_INTERVAL apart
+        wait = MIN_INTERVAL - (clock() - _last_request[0])
+        if wait > 0:
+            sleep(wait)
+        _last_request[0] = clock()
     request = urllib.request.Request(COMPANYFACTS_URL.format(cik=number),
                                      headers={"User-Agent": user_agent, "Accept-Encoding": "gzip"})
     status, headers, body = opener(request)

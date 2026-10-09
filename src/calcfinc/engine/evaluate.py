@@ -15,9 +15,8 @@ from calcfinc.engine.records import PeriodRecord
 from calcfinc.fact import SharePrice
 from calcfinc.formula import CalcError, evaluate, names_in
 from calcfinc.num import ZERO, add, to_text
+from calcfinc.registry.metrics import CURRENCY_KINDS
 from calcfinc.registry.ratios import FORMULAS, NOT_FOR, PERIOD_DAYS, PRICE, RatioSpec
-
-_CURRENCY_UNITS = frozenset({"currency", "per_share"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,5 +184,5 @@ class Evaluator:
             return _fail(f"{spec.name}: inputs are in different currencies "
                          f"({', '.join(sorted(out.currencies))}); not comparable")
         # A ratio is dimensionless: only amounts keep their currency.
-        keep = out.currencies if spec.unit in _CURRENCY_UNITS else frozenset()
+        keep = out.currencies if spec.unit in CURRENCY_KINDS else frozenset()
         return replace(out, currencies=keep)

@@ -77,6 +77,7 @@ class ParsedCompanyFacts:
     facts: tuple[ParsedFact, ...]
     derived_quarters: int
     notes: tuple[str, ...]
+    year_end_known: bool = True    # False when no full-year figures existed and December was only assumed
 
 
 # ---------------------------------------------------------------------------------------------
@@ -99,16 +100,32 @@ def _date(v: object) -> date | None:
         return None
 
 
-def _unit_for(kind: str, units: Mapping[str, Any]) -> tuple[str, str | None] | None:
+def _home_currency(taxonomies: Mapping[str, Any]) -> str | None:
+    """The currency the filer reports most in, over every concept, so all of its metrics share one
+    currency (a concept with a few translated periods in another unit does not change it)."""
+    counts: Counter[str] = Counter()
+    for concepts in taxonomies.values():
+        for node in (concepts or {}).values():
+            for unit, entries in ((node or {}).get("units") or {}).items():
+                if _CURRENCY.match(unit):
+                    counts[unit] += len(entries)
+    return max(counts, key=lambda u: (counts[u], u == "USD")) if counts else None
+
+
+def _unit_for(kind: str, units: Mapping[str, Any], home: str | None = None) -> tuple[str, str | None] | None:
     """(unit key, currency) to read for a metric of this kind, or None if the concept does not
     report in a matching unit. A figure in the wrong kind of unit is skipped, never coerced."""
+    # The filer's home currency (see _home_currency) is read whenever the concept has it, so every
+    # metric of one filer is in one currency; a concept that lacks it falls back to the unit it
+    # reports most in (ties go to USD).
     if kind == "currency":
         keys = sorted(k for k in units if _CURRENCY.match(k))
-        pick = "USD" if "USD" in keys else keys[0] if keys else None
+        pick = home if home in keys else max(keys, key=lambda k: (len(units[k]), k == "USD"), default=None)
         return (pick, pick) if pick else None
     if kind == "per_share":
         keys = sorted(k for k in units if _PER_SHARE.match(k))
-        pick = "USD/shares" if "USD/shares" in keys else keys[0] if keys else None
+        pick = (f"{home}/shares" if f"{home}/shares" in keys
+                else max(keys, key=lambda k: (len(units[k]), k == "USD/shares"), default=None))
         return (pick, pick[:3]) if pick else None
     if kind == "shares":
         return ("shares", None) if "shares" in units else None
@@ -163,14 +180,14 @@ def _canonical_periods(weight: Mapping[tuple[date | None, date], int]
 
 
 def _select(taxonomies: Mapping[str, Any], candidates: tuple[tuple[str, str], ...], kind: str,
-            forms: Collection[str]) -> dict[tuple[date | None, date], _Sel]:
+            forms: Collection[str], home: str | None = None) -> dict[tuple[date | None, date], _Sel]:
     found: list[tuple[int, str, str, str | None, dict[tuple[date | None, date], list[Entry]]]] = []
     weight: Counter[tuple[date | None, date]] = Counter()
     for idx, (tax, concept) in enumerate(candidates):
         node = (taxonomies.get(tax) or {}).get(concept)
         if not node:
             continue
-        pick = _unit_for(kind, node.get("units") or {})
+        pick = _unit_for(kind, node.get("units") or {}, home)
         if pick is None:
             continue
         unit, currency = pick
@@ -319,12 +336,13 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
     us = taxonomies.get("us-gaap") or {}
     is_bank = "NoninterestExpense" in us and "Deposits" in us
 
+    home = _home_currency(taxonomies)
     selections: dict[str, dict[tuple[date | None, date], _Sel]] = {}
     for metric, candidates in CANDIDATES.items():
         spec = metrics.get(metric)
         if spec is None or (metric.startswith("bank.") and not is_bank):
             continue
-        chosen = _select(taxonomies, candidates, spec.kind, forms)
+        chosen = _select(taxonomies, candidates, spec.kind, forms, home)
         if chosen:
             selections[metric] = chosen
 
@@ -347,6 +365,8 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
     for metric, chosen in selections.items():
         spec = metrics.get(metric)
         assert spec is not None
+        if not chosen:                      # every period was a year that does not end at the year end given
+            continue
         pit = spec.is_point_in_time
         items: list[tuple[date | None, date, _Sel, tuple[Entry, ...], str | None]] = []
         for (s, e), sel in chosen.items():
@@ -390,4 +410,5 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
                                p.fact.reported_at or date.min))
     currencies = Counter(p.fact.currency for p in parsed if p.fact.currency)
     return ParsedCompanyFacts(cik, name, fye, currencies.most_common(1)[0][0] if currencies else None,
-                              tuple(parsed), derived_count, tuple(notes))
+                              tuple(parsed), derived_count, tuple(notes),
+                              year_end_known=fiscal_year_end_month is not None or bool(year_ends))
