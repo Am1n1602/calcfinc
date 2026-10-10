@@ -17,7 +17,8 @@ computes is derived from facts, and every result lists the facts it used.
   an amount with neither is rejected.
 - **Consolidated and standalone are separate bases** and are never substituted for each other.
 - **Restatements are kept.** Two facts for the same period that differ only in `reported_at` are
-  both stored; the engine uses the latest-reported one.
+  both stored; the engine uses the latest-reported one, or, through `engine.as_of(date)`, the latest
+  reported on or before that date. A fact with no `reported_at` is treated as always known.
 
 ## Fields
 

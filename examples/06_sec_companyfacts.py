@@ -1,8 +1,9 @@
 """Example 6: a US filer from the SEC's companyfacts JSON (a synthetic file here, read offline).
 
 Shows what the adapter does that a plain copy of the numbers would not: the fourth quarter the SEC
-never reports is derived, a restated figure is kept as a second version, and every fact points to
-the filing it came from. To download a real file, see fetch_companyfacts and docs/adapters.md.
+never reports is derived, a restated figure is kept as a second version (and can be viewed as it was
+known on a date), and every fact points to the filing it came from.
+To download a real file, see fetch_companyfacts and docs/adapters.md.
 """
 from pathlib import Path
 
@@ -27,5 +28,8 @@ print("net profit FY2025 as filed, then restated:", " -> ".join(f"{v} ({d})" for
 
 roe = eng.get_ratio("SYN", "roe", period="FY2025")
 print(f"ROE FY2025: {roe.value} pct, on the latest figures")
+for day in ("2026-06-30", "2027-12-31"):
+    seen = eng.as_of(day).get_ratio("SYN", "roe", period="FY2025")
+    print(f"ROE FY2025 as known on {day}: {seen.value} pct")
 src = repos.sources.get(eng.get_metric("SYN", "revenue", period="FY2025").inputs[0].source_id)
 print("revenue FY2025 comes from:", src.document_title, "-", src.uri)

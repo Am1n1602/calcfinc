@@ -6,7 +6,7 @@ imports an adapter, and an adapter never changes how a ratio is computed.
 | Adapter | Source | Notes |
 |---|---|---|
 | `calcfinc.adapters.ind_as_xbrl` | Indian exchange XBRL filings (.xbrl file, raw fact rows, or canonical records) | April-March year, INR, `india.*` ratios |
-| `calcfinc.adapters.sec_companyfacts` | The SEC's public `companyfacts` JSON | US-GAAP filers; IFRS is not mapped yet |
+| `calcfinc.adapters.sec_companyfacts` | The SEC's public `companyfacts` JSON | US-GAAP filers, US insurers, and IFRS filers of 20-F and 40-F |
 
 ## Ind-AS XBRL
 
@@ -68,23 +68,47 @@ sec.load_companyfacts(repos, data, ticker="AAPL")
   `alternate_tag` in the fact's mapping reason. Filers change concepts over time, so the choice is
   never made once for a whole history.
 - **Restatements are kept.** A figure that changes in a later filing becomes a second version with
-  `reported_at` set to that filing's date; the engine uses the latest. A later filing that merely
-  repeats a comparative figure adds nothing.
+  `reported_at` set to that filing's date; the engine uses the latest, and `engine.as_of(date)` the
+  one known on a date. A later filing that merely repeats a comparative figure adds nothing.
 - **The fourth quarter is derived.** The SEC reports no stand-alone Q4, so it is the year less the
   nine-month figure (or less the three reported quarters). Cash-flow statements, which are
   reported year-to-date only, become single quarters the same way. Derived facts are marked
   `derived` with the arithmetic in the reason. This is what makes trailing-twelve-month ratios
-  work for SEC filers.
+  work for SEC filers. A derived quarter has one version for each filing that changed its inputs
+  (a year restated in a later 10-K gives a second Q4), so a view as of a date between the two still has
+  the quarter; a quarter that a later recast filing reported itself is also derived for the dates before it.
 - **Only currency amounts are derived.** Per-share figures are not additive, so a Q4 EPS is never
   invented.
 - **Every fact points to its filing.** Each accession number becomes a source with the form and
   the filing URL, so `result.inputs[...].source_id` leads back to the document.
 - The fiscal year end is inferred from the full-year figures (a 52/53-week year ending on 1 Feb is
   a January year end). Pass `fiscal_year_end_month=` to override.
-- Facts carrying a dimension are ignored; amounts are already in base units; only 10-K, 10-Q, 20-F
-  and 40-F family filings are read (`forms=` to change). 8-Ks are ignored.
-- **US GAAP has no exceptional-items line**, so `pbt_before_exceptional` is set equal to pre-tax
-  income, marked `derived`, so EBIT-based ratios work.
+- Facts carrying a dimension are ignored; amounts are already in base units; only 10-K, 10-Q, 20-F,
+  40-F and 6-K family filings are read (`forms=` to change). 8-Ks are ignored.
+- **Neither US GAAP nor IFRS has an exceptional-items line**, so `pbt_before_exceptional` is set equal
+  to pre-tax income, marked `derived`, so EBIT-based ratios work.
+- **IFRS filers (`ifrs-full`).** The IFRS concepts follow the US ones in each metric's candidate list.
+  A 20-F or 40-F filer gives annual statements in its own currency, and quarters from its 6-Ks where it
+  tags them (Shell and Royal Bank of Canada do; SAP, Infosys and Novo Nordisk give years only, and a
+  trailing twelve months is then the latest year). Only clean concepts are read: trade *and other*
+  receivables and payables are not trade receivables and payables, lease liabilities are not debt,
+  and the combined purchase of PP&E and intangibles is not capex. Earnings per share is the filer's total EPS concept only: continuing-operations EPS is not taken for it,
+  so a filer without total EPS gets EPS derived from profit over shares, with a note. A filer that tags `DepositsFromBanks` or
+  `DepositsFromCustomers` is declared a bank (generic ratios withheld, interest expense not read as a finance
+  cost, `bank.*` not mapped). A filer that tags `InsuranceRevenue` is named an IFRS 17 insurer in a
+  note: insurance revenue is not earned premium, so `insurance.*` is not mapped.
+- **US insurers.** `PremiumsEarnedNet` (or its property and casualty form), policyholder benefits
+  and claims incurred (or incurred claims of a property and casualty insurer) and net investment income
+  are mapped, only for a filer that reports premiums earned, is not a bank (large banks tag premiums
+  too) and earns at least half its revenue from them (a manufacturer with a captive insurer tags them on a
+  few percent of sales; funds tag `NetInvestmentIncome`). No concept is the total underwriting expense
+  (acquisition cost amortization and other underwriting expense are tagged apart), so it is
+  `BenefitsLossesAndExpenses` less claims incurred, for each period and each version of it, marked
+  `derived`. It also holds interest expense, interest credited to policyholders and policyholder
+  dividends, so it overstates the expense of a life insurer badly (MetLife) and a multi-line insurer
+  somewhat (Chubb). Some insurers tag
+  their claims with a company-specific concept that the SEC feed does not carry (Allstate since 2024),
+  so their loss ratio is `None` for those years.
 
 ### Downloading, politely
 
@@ -167,8 +191,17 @@ open("CIK0000320193.json", "wb").write(raw)
   the live run and every one examined was this effect. Three aids exist: every input in a result
   carries `reported_at`; a result says so in `limitations` when inputs for one period were first
   reported more than 120 days apart; and `engine.check_periods()` tests, per year, whether the
-  four quarters add up to the year. Point-in-time views (`as_of`) are the planned fix.
+  four quarters add up to the year. `engine.as_of(date)` shows what was known on a date, so a figure
+  can be seen before and after the restating filing.
 - Debt lines use only the first available concept, never a sum, so a filer that reports several
   overlapping debt concepts may show a partial figure.
-- Not covered yet: IFRS filers (`ifrs-full`), insurer concepts from the SEC, and the
+- **Later runs (0.1.3).** Four US insurers (Progressive, Chubb, Travelers, Allstate; MetLife was in the
+  earlier run) and five IFRS filers (Infosys, Novo Nordisk, SAP and Shell on 20-F, Royal Bank of Canada on
+  40-F) were downloaded once and run end to end. They found and fixed: IFRS "current tax" meaning only the
+  current year's charge (Novo Nordisk), and Citigroup tagging premiums like an insurer. Identity checks still
+  fail for restatement-vintage reasons (SAP 2017-18, Royal Bank of Canada 2017 and 2023 quarters) and for
+  Shell's 2016-17 tax split. For the US filers run before, every latest figure was identical before and
+  after the changes; only insurer lines and earlier quarter versions were added. Point in time was checked on 14 real restated annual figures.
+- Not covered yet: IFRS 17 insurers, IFRS bank lines, IFRS filings read from XBRL files, an
+  underwriting expense net of interest and policyholder items, filers that report half-years only, and the
   period-end details of 4-4-5 retail calendars beyond what the 52/53-week handling covers.

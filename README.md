@@ -150,8 +150,9 @@ print(fcf.limitations[0])
 CSV (long or wide), dicts, pandas, or your own storage; a SQLite file if you want it to persist.
 Two adapters read real filings:
 
-- **SEC `companyfacts`** (US-GAAP): exact periods, restatements kept as versions, the fourth
-  quarter derived, bank lines for banks.
+- **SEC `companyfacts`** (US-GAAP, and IFRS for 20-F and 40-F filers): exact periods, restatements
+  kept as versions (and viewable `as_of` a date), the fourth quarter derived, bank lines for banks,
+  premiums and claims for insurers.
 - **Indian exchange XBRL** (Ind-AS): April-March year, `india.*` ratios in the Schedule III and ICAI
   forms, placeholder zeros not loaded.
 

@@ -1,6 +1,6 @@
 # calcfinc manual
 
-Version 0.1.2. This manual is tested: every Python example in it is run by the test suite, and
+Version 0.1.3. This manual is tested: every Python example in it is run by the test suite, and
 every value shown after `# ->` is checked against what the code returns.
 
 **Contents**
@@ -227,6 +227,31 @@ eng.get_metric("A", "revenue").value                          # -> 90
 Both versions stay in the store, so you can audit what changed and when. If the later figure
 is missing (`None`), it does not erase the earlier one.
 
+### As it was known on a date
+
+`as_of` gives a view of the same data as it stood on a date: a fact first reported later, such as a
+restatement, is left out. Use it for a back-test, or to reproduce a number you published.
+
+```python
+past = eng.as_of("2027-06-01")                      # a new engine; eng itself is unchanged
+past.get_metric("A", "revenue").value               # -> 100
+past.get_metric("A", "revenue").as_of               # -> 2027-06-01
+eng.as_of("2026-12-31").get_metric("A", "revenue").value   # -> None
+```
+
+- Every method works on the view, and each result carries `as_of`. A date that is a filing date
+  includes that filing.
+- A fact with no `reported_at` cannot be placed in time. It stays in every view, and a result that
+  used one says so in `limitations`, so a back-test is never quietly wrong. Load `reported_at` (the
+  records and DataFrame loaders take a column; Indian XBRL takes `reported_at=` or, for several
+  files, `{file name or path: date}` with an entry for every file, `None` for an undated one).
+- Segment data is not dated; a view refuses it.
+- Views made from one engine read the store once and share that read, so a loop over many dates is cheap.
+  After loading more data, call `refresh()` on the engine and make new views.
+- For SEC data, fourth quarters and year-to-date cash flows are derived for each version of their
+  year, so a view between a filing and its restatement still has them. A database loaded with an
+  earlier release should be loaded again to get those versions.
+
 ### A database that outlives the process
 
 `FinancialEngine.from_*` keep everything in memory. To keep it, open a `SqliteRepositories` on a
@@ -442,6 +467,7 @@ r.ok                  # -> True
 | `components` | extra detail (the DuPont factors, a valuation's price and date) |
 | `limitations` | tuple of plain-language notes |
 | `definition_version` | bumps when a built-in definition changes |
+| `as_of` | the date of the view that answered, or `None` |
 
 **`limitations` is part of the answer.** It carries, in this order of importance:
 
@@ -578,6 +604,17 @@ supply these lines for filings that carry them.
 | bank | EBIT, EBITDA, interest cover, margins and ROCE built on them; total debt and every debt ratio and EV built on it; current, quick and cash ratios; gross margin, turnovers and days; free cash flow, cash conversion, capex ratios | ROE, ROA, `roa_avg`, equity multiplier, DuPont, per-share and valuation ratios, everything under `bank.*` |
 | insurer | current, quick and cash ratios; gross margin, turnovers and days; free cash flow, cash conversion, capex ratios | debt ratios and interest cover (insurers borrow), ROE, ROA, everything else |
 
+**Insurers from the SEC feed.** US insurers' premiums earned, claims incurred and net investment income
+are mapped, so the loss ratio and the investment income ratio work. No concept is a filer's total
+underwriting expense, so it is derived: total benefits, losses and expenses less claims incurred, marked
+`derived` with that reason. It is therefore an upper bound that also holds interest expense, interest
+credited to policyholders, policyholder dividends and other items inside the total. For a property and
+casualty insurer the expense and combined ratios are close to the usual figures (Progressive 23.9% and
+89.9% for 2025); for Chubb it reads higher than the company's own expense ratio, and for a life insurer
+(MetLife: 45.6% and 145%) it is not an underwriting expense at all, and claims incurred holds
+policyholder benefits, so the "loss ratio" reads as a benefit ratio. Compare it with the filing before
+relying on it.
+
 The exact list is in [ratios.md](ratios.md), under "not computed for". The bank ratios
 (`bank.net_interest_margin`, `bank.credit_cost`, `bank.gross_npa_to_advances`, `bank.cost_to_income`
 and others) follow the RBI forms, with labelled fallbacks where a filing lacks the preferred input.
@@ -673,7 +710,7 @@ Adapters read one source's conventions and produce facts. The core never imports
 Full details, including what each does and does not do, are in [adapters.md](adapters.md); the
 essentials follow.
 
-**SEC `companyfacts` (US-GAAP filers).** Download once, keep the file, load it:
+**SEC `companyfacts` (US-GAAP filers, and IFRS filers of 20-F and 40-F).** Download once, keep the file, load it:
 
 ```python skip
 from calcfinc import FinancialEngine, SqliteRepositories
@@ -696,6 +733,9 @@ eng.get_ratio("AAPL", "roe", period="FY2025")
   year-to-date cash flows become single quarters. Derived facts are marked as such.
 - Restatements are kept as versions dated by their filing.
 - Trailing-twelve-month figures in 10-Qs are not mistaken for fiscal years.
+- IFRS filers (`ifrs-full`) load in their own currency; their quarters, where they report them, come
+  from 6-Ks. An IFRS bank is declared a bank (its `bank.*` lines are not mapped); an IFRS 17 insurer
+  is named in a note and not mapped.
 
 **Indian exchange XBRL filings.** One `.xbrl` file, or many:
 
@@ -767,17 +807,23 @@ data. Beyond that, the adapters were run on real filings kept outside the reposi
 - **SEC:** 19 filers (Apple, Microsoft, JPMorgan, Wells Fargo, Citigroup, Goldman Sachs, MetLife,
   Walmart, Costco, Amazon, NVIDIA, Alphabet, Exxon, Johnson & Johnson, Caterpillar, Duke, Prologis,
   Coca-Cola, AT&T). Revenue and net income matched the published figures for every one checked.
+  Later runs added four US insurers (Progressive, Chubb, Travelers, Allstate) and five IFRS filers
+  of 20-F and 40-F (Infosys, Novo Nordisk, SAP, Shell, Royal Bank of Canada).
+- **Point in time:** on 14 real restated annual figures (Boeing, JPMorgan, Progressive, Chubb, Allstate,
+  Royal Bank of Canada, Wells Fargo, Johnson & Johnson, AT&T, Citigroup, MetLife, Duke and others), a
+  view the day before the restating filing gave the old figure and the filing's day gave the new one.
 
 That testing found and fixed a long list of real-world defects (documented in
 [adapters.md](adapters.md)), which is the reason to trust the pattern more than the count.
 
-**Not verified or not covered:** IFRS filers and 20-F/40-F filers; insurers on the SEC feed; REITs
-and utilities beyond one example each; banks other than the ones above (US bank concepts were
-checked on one bank); the Python 3.11 and 3.13 interpreters locally (CI runs them). Unknown
+**Not verified or not covered:** IFRS 17 insurers, IFRS bank lines (`bank.*`) and IFRS filings read
+from XBRL files rather than the SEC feed; filers that report half-years only; SEC insurers' underwriting
+expense net of interest and policyholder items; REITs and utilities beyond one example each; banks other than the ones above (US bank
+concepts were checked on one bank); the Python 3.11 and 3.13 interpreters locally (CI runs them). Unknown
 concepts in a filing are left unmapped, never guessed, so a new filer may show missing metrics.
 **Restatement vintages:** when a company recasts only some figures, a period can combine figures
-from different filings; the result says so, and `check_periods()` finds it, but point-in-time
-views (`as_of`) are not in 0.1.
+from different filings; the result says so, `check_periods()` finds it, and `as_of` shows what was
+known on a date.
 
 ## 16. Troubleshooting
 
@@ -823,7 +869,7 @@ unadjusted numbers, and a restated figure replaces an original. Check `result.in
 **`FinancialEngine`**
 
 ```text
-FinancialEngine(repos, windows=PeriodWindows())
+FinancialEngine(repos, windows=PeriodWindows(), as_of=None)
 FinancialEngine.from_csv(path, **options)        FinancialEngine.from_records(rows, **options)
 FinancialEngine.from_dataframe(df, layout="long", float_policy="refuse", **options)
   options: entity, currency, basis, fiscal_year_end_month, sector, windows, entity_kind
@@ -836,6 +882,7 @@ FinancialEngine.from_dataframe(df, layout="long", float_policy="refuse", **optio
 .check(entity, basis=, period=None)                   .check_periods(entity, basis=)
 .get_segment_data(entity, basis=, period=)            .segment_growth(entity, basis=, kind="yoy")
 .periods(entity, basis=)   .available_metrics(entity, basis=)   .refresh()   .repos
+.as_of(date_or_iso_text)       a view of the data as known on that date (a new engine)
 ```
 
 **Errors.** `EngineError` (a `ValueError`): unknown entity, unrecognised period, unusable argument.

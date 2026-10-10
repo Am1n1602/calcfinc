@@ -8,9 +8,18 @@ from pathlib import Path
 
 from calcfinc import FinancialEngine, RatioSpec, StatementType, register_metric, register_ratio
 
-register_metric("principal_repayment", "currency", StatementType.PROFIT_AND_LOSS, label="Loan principal repaid")
-register_metric("interest_paid", "currency", StatementType.PROFIT_AND_LOSS, label="Interest paid")
-register_ratio(RatioSpec("dscr", "x", "ebitda / (principal_repayment + interest_paid)",
+PL, BS = StatementType.PROFIT_AND_LOSS, StatementType.BALANCE_SHEET
+# The monthly CSV has lines calcfinc has no built-in input for; register them before loading.
+register_metric("cost_of_goods_sold", "currency", PL, label="Cost of goods sold")
+register_metric("operating_expenses", "currency", PL, label="Operating expenses")
+register_metric("amortization", "currency", PL, label="Amortization")
+register_metric("principal_repayment", "currency", PL, label="Loan principal repaid")
+register_metric("interest_paid", "currency", PL, label="Interest paid")
+register_metric("accounts_receivable", "currency", BS, point_in_time=True, label="Accounts receivable")
+
+# EBITDA here is pre-tax profit with interest, depreciation and amortization added back.
+register_ratio(RatioSpec("dscr", "x", "(pbt_before_exceptional + finance_costs + depreciation + amortization)"
+                                      " / (principal_repayment + interest_paid)",
                          label="Debt service coverage ratio"))
 
 eng = FinancialEngine.from_csv(Path(__file__).parent / "data" / "monthly_sme.csv", entity="Corner Bakery",
@@ -21,4 +30,5 @@ for month in eng.periods("Corner Bakery"):
     print(f"{month} dscr: {r.value:.4f}")
 print("leverage:", eng.get_ratio("Corner Bakery", "debt_to_equity", period="latest_month").value.quantize(
     Decimal("0.0001")))
-print("revenue growth:", eng.get_growth("Corner Bakery", "revenue", kind="mom").value, "% month on month")
+print("revenue growth:", f"{eng.get_growth('Corner Bakery', 'revenue', kind='mom').value:.2f}",
+      "% month on month")
