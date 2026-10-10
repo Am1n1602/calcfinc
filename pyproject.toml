@@ -12,7 +12,8 @@ license-files = ["LICENSE"]
 authors = [{ name = "Am1n1602 (Aman Gautam)" }]
 requires-python = ">=3.11"
 dependencies = []
-keywords = ["finance", "financial-statements", "financial-ratios", "xbrl", "sec", "audit", "provenance", "decimal"]
+keywords = ["finance", "financial-statements", "financial-ratios", "xbrl", "sec", "ifrs", "insurance", "audit",
+            "provenance", "point-in-time", "decimal"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

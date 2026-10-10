@@ -4,6 +4,71 @@ All notable changes are listed here. The project follows [semantic versioning](h
 while the version is 0.x, a minor release may change the public API, and any such change is listed
 under "Changed". A change to a built-in ratio definition raises its `definition_version`.
 
+## 0.1.3 - 2026-10-10
+
+Closes the three gaps listed as known limitations in 0.1.0: restated data can be viewed as it was known on
+a date, US insurers are mapped from the SEC feed, and IFRS filers of 20-F and 40-F are mapped. No built-in
+ratio definition changes.
+
+### Added
+
+- `FinancialEngine.as_of(date)` (a date, a datetime or ISO text): a view of the same data as it was known
+  on that date. A fact first reported later, such as a restatement, is left out. Every method works on the
+  view and each `EngineResult` carries `as_of`. A fact with no `reported_at` cannot be placed in time; it
+  stays in every view and a result that used one says so in `limitations`. Segment data is not dated, so a
+  view refuses it. `FinancialEngine(repos, as_of=...)` does the same at construction. Views made from one
+  engine read the stored facts once and share them.
+- `load_xbrl_files(..., reported_at={file: date})` (a file name or the path as given), so an Indian original and
+  its revision can carry different dates and be kept as two versions. Every file needs an entry (`None` for an
+  undated one) and every entry must match a file; otherwise it raises before loading anything.
+- SEC insurers: `insurance.net_earned_premium`, `insurance.claims_incurred` and
+  `insurance.net_investment_income` from `PremiumsEarnedNet`, `PolicyholderBenefitsAndClaimsIncurredNet`
+  (or `IncurredClaimsPropertyCasualtyAndLiability`) and `NetInvestmentIncome`, only for a filer that reports
+  premiums earned, is not a bank and earns at least half its revenue from them (a manufacturer with a captive
+  insurer is not an insurer). The loss and investment income ratios work. Underwriting expenses
+  (no concept is the total) are derived as total benefits, losses and expenses less claims incurred, marked
+  `derived`; they also hold interest expense and policyholder items, so the expense and combined ratios are
+  an upper bound, and not meaningful for a life insurer.
+- IFRS filers of 20-F and 40-F through the SEC feed (`ifrs-full` concepts, in the filer's own currency),
+  with 6-K filings read for the quarters some of them report. An IFRS bank is declared a bank; an IFRS 17
+  insurer is named in a note and not mapped.
+
+### Fixed
+
+- SEC fourth quarters and year-to-date cash-flow quarters are now derived for each version of their year,
+  not only from the latest one. Before, a view between a filing and its restatement had the year but not the
+  quarter, so a trailing twelve months failed there. A quarter that a later recast filing reported itself is
+  also derived for the dates before it. The latest figure of every metric is unchanged, but a database
+  loaded with 0.1.x should be loaded again to get the earlier versions.
+- A concept shared by two taxonomies (`Assets`, `ProfitLoss`) can no longer be taken for one series when a
+  filer reports both.
+- Reading 6-Ks cannot hide a 20-F or 10-K year from the fiscal-year-end inference when the 6-K earnings release
+  reported the same figure first.
+- A quarter that a later recast filing reports itself is derived, for the dates before it, with the reported
+  quarter's own start and end, so the two are versions of one period and not two periods.
+- IFRS earnings per share is the total EPS concept only; continuing-operations EPS is no longer taken for it.
+- A view `as_of` a date adds "facts reported later are left out" to a missing figure only when such facts
+  exist, instead of to every missing figure.
+
+### Changed
+
+- 6-K and 6-K/A are now among the forms read by default (`forms=` to change).
+- `pbt_before_exceptional` is described as derived because neither US GAAP nor IFRS has an exceptional-items
+  line (the reason text changed; the value did not).
+- Examples 1 to 5 were rewritten for the updated sample CSVs in `examples/data` (two years of data, larger
+  amounts, a USD and an INR company in one file, six months for the monthly accounts). They register the few
+  inputs calcfinc has no built-in metric for, and the example DSCR now adds back interest itself. The sample
+  CSVs no longer carry quantities calcfinc computes (`ebitda`, `free_cash_flow`, `insurance.claim_ratio`).
+- Package keywords now include `ifrs`, `insurance` and `point-in-time`.
+
+### Known limitations
+
+- IFRS 17 insurers, IFRS bank lines (`bank.*`), IFRS filings read from XBRL files and filers that report
+  half-years only are not mapped. SEC insurers' underwriting expense is not net of interest and policyholder
+  items. Segment data is not dated.
+- EBIT is `profit before exceptional items + finance costs`, so it includes non-operating gains.
+- LLM function-calling schemas and an MCP server are planned for a later release.
+
 ## 0.1.2 - 2026-10-09
 
 Makes the project easier to try: a result's audit trail as a DataFrame, a tour notebook for Colab with a real
@@ -123,7 +188,7 @@ Nothing: this is the first release.
 
 ### Known limitations
 
-- Point-in-time views (`as_of`) for restated data are not implemented.
-- IFRS filers, SEC insurers and 20-F/40-F filers are not mapped.
+- Point-in-time views (`as_of`) for restated data are not implemented (added in 0.1.3).
+- IFRS filers, SEC insurers and 20-F/40-F filers are not mapped (added in 0.1.3).
 - EBIT is `profit before exceptional items + finance costs`, so it includes non-operating gains.
 - LLM function-calling schemas and an MCP server are planned for a later release.
