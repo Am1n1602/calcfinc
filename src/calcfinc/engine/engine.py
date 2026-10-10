@@ -5,14 +5,15 @@ entry saying why -- never 0, never a guess.
 """
 from __future__ import annotations
 
+import functools
 import importlib
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, fields, is_dataclass
-from datetime import date
+from dataclasses import dataclass, field, fields, is_dataclass, replace
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeVar, cast
 
 from calcfinc.engine import decompose, growth
 from calcfinc.engine.check import ABS_TOL, REL_TOL, CheckResult, check_values, quarters_add_up
@@ -20,13 +21,13 @@ from calcfinc.engine.evaluate import Evaluator, FactRef, Outcome
 from calcfinc.engine.records import PeriodRecord, build_period_records
 from calcfinc.engine.segments import SegmentEngine, SegmentResult
 from calcfinc.entity import Entity
-from calcfinc.fact import Basis
+from calcfinc.fact import Basis, FinancialFact
 from calcfinc.formula import CalcError, evaluate
 from calcfinc.num import ZERO, Num, to_decimal, to_text
 from calcfinc.period import DEFAULT_WINDOWS, PeriodWindows
 from calcfinc.registry import metrics as _metrics
 from calcfinc.registry import ratios
-from calcfinc.registry.ratios import PERIOD_DAYS, RatioSpec
+from calcfinc.registry.ratios import PERIOD_DAYS, PRICE, RatioSpec
 from calcfinc.store.base import PRICE_WINDOW_DAYS, AmbiguousEntity
 
 
@@ -45,6 +46,7 @@ class EngineResult:
     limitations: tuple[str, ...] = ()
     currency: str | None = None
     definition_version: int | None = None
+    as_of: date | None = None                # set when the engine was a view as of a date (FinancialEngine.as_of)
 
     @property
     def ok(self) -> bool:
@@ -114,6 +116,30 @@ def _parse_period(period: Any) -> tuple[Any, ...]:
         if m:
             return ("month", int(m.group(1)), int(m.group(2)))
     raise EngineError(f"unrecognized period spec: {period!r}")
+
+
+def _as_of_date(when: Any) -> date:
+    if isinstance(when, datetime):
+        return when.date()
+    if isinstance(when, date):
+        return when
+    if isinstance(when, str):
+        try:
+            return date.fromisoformat(when.strip())
+        except ValueError:
+            pass
+    raise EngineError(f"as_of must be a date or an ISO date like '2026-03-31', not {when!r}")
+
+
+_R = TypeVar("_R", bound=Callable[..., EngineResult])
+
+
+def _dated(fn: _R) -> _R:
+    """Mark a result as made by a view as of a date, and say what that date could not decide."""
+    @functools.wraps(fn)
+    def run(self: FinancialEngine, *args: Any, **kwargs: Any) -> EngineResult:
+        return self._stamp(fn(self, *args, **kwargs))
+    return cast(_R, run)
 
 
 def _flag_limits(rec: PeriodRecord, used: Sequence[str]) -> tuple[str, ...]:
@@ -201,18 +227,76 @@ def _flow_stock_note(rec: PeriodRecord, name: str, leaves: Sequence[FactRef]) ->
 class FinancialEngine:
     """Build the engine after loading data; call `refresh()` if facts change afterwards."""
 
-    def __init__(self, repos: Any, *, windows: PeriodWindows = DEFAULT_WINDOWS) -> None:
+    def __init__(self, repos: Any, *, windows: PeriodWindows = DEFAULT_WINDOWS, as_of: Any = None) -> None:
         self._repos = repos
         self._windows = windows
+        self._as_of = None if as_of is None else _as_of_date(as_of)
+        self._later: dict[tuple[str, str], bool] = {}      # (entity, basis) -> has facts reported after as_of
+        # stored facts by (entity id, basis), read once and shared by the views made from this engine, so a loop
+        # over many dates does not read the store for each one
+        self._raw: dict[tuple[int, str], list[FinancialFact]] = {}
         self._cache: dict[tuple[int, str], list[PeriodRecord]] = {}
         self._inferred: dict[int, str | None] = {}         # id(records) -> sector inferred from the facts
         self._positions: dict[int, dict[int, int]] = {}    # id(records) -> {id(record): index}
         self._segments = SegmentEngine(repos)
 
     def refresh(self) -> None:
+        self._raw.clear()
         self._cache.clear()
         self._inferred.clear()
         self._positions.clear()
+
+    def as_of(self, when: date | datetime | str) -> FinancialEngine:
+        """The same data as it was known on `when` (a date or ISO text): facts first reported later,
+        such as a restatement, are left out. Returns a new engine that shares the repositories and has its
+        own caches, so create it again after loading more data. Segment data is not dated and is refused."""
+        view = FinancialEngine(self._repos, windows=self._windows, as_of=_as_of_date(when))
+        view._raw = self._raw
+        return view
+
+    def _facts(self, entity_id: int, basis: str) -> list[FinancialFact]:
+        """The stored facts of one entity and basis. A view caches them (shared with the engine it came from);
+        the engine itself reads them once into its period records and keeps no second copy."""
+        if self._as_of is None:
+            return list(self._repos.facts.list_facts(entity_id, basis=basis))
+        key = (entity_id, basis)
+        if key not in self._raw:
+            self._raw[key] = list(self._repos.facts.list_facts(entity_id, basis=basis))
+        return self._raw[key]
+
+    def _stamp(self, res: EngineResult) -> EngineResult:
+        if self._as_of is None:
+            return res
+        notes: list[str] = []
+        undated = self._undated(res)
+        if undated:
+            notes.append(self._undated_note(undated))
+        if res.value is None and not res.ok and self._has_later_facts(res):
+            notes.append(f"as of {self._as_of}: facts reported later are left out of this view")
+        return replace(res, as_of=self._as_of, limitations=res.limitations + tuple(notes))
+
+    @staticmethod
+    def _undated(res: EngineResult) -> list[str]:
+        """Metrics among a result's inputs whose facts carry no filing date."""
+        return sorted({i.metric for i in res.inputs
+                       if i.reported_at is None and i.metric not in (PRICE, PERIOD_DAYS)})
+
+    def _undated_note(self, metrics: Sequence[str]) -> str:
+        return f"as of {self._as_of}: {', '.join(metrics)} have no filing date, so the date could not exclude them"
+
+    def _has_later_facts(self, res: EngineResult) -> bool:
+        """Does the store hold facts for this result's entity that were reported after the view's date? Only
+        then can the date be why a figure is missing."""
+        key = (res.entity or "", res.basis or Basis.CONSOLIDATED.value)
+        if key not in self._later:
+            try:
+                ent = self._repos.entities.resolve(key[0]) if key[0] else None
+            except AmbiguousEntity:
+                ent = None
+            facts = self._facts(ent.id, key[1]) if ent is not None and ent.id else []
+            cutoff = self._as_of or date.max
+            self._later[key] = any(f.reported_at is not None and f.reported_at > cutoff for f in facts)
+        return self._later[key]
 
     @property
     def repos(self) -> Any:
@@ -279,7 +363,8 @@ class FinancialEngine:
         if key not in self._cache:
             self._cache[key] = build_period_records(
                 self._repos, key[0], key[1], windows=self._windows,
-                fiscal_year_end_month=ent.fiscal_year_end_month)
+                fiscal_year_end_month=ent.fiscal_year_end_month, as_of=self._as_of,
+                facts=self._facts(key[0], key[1]))
         return self._cache[key]
 
     @staticmethod
@@ -453,6 +538,7 @@ class FinancialEngine:
     # ------------------------------------------------------------------ #
     # API
     # ------------------------------------------------------------------ #
+    @_dated
     def get_metric(self, entity: str | Entity, metric: str, *, basis: Basis | str = "consolidated",
                    period: Any = "latest", fallback: bool = False) -> EngineResult:
         """A reported metric, or a derived quantity. For a derived one, 'latest*' means the newest
@@ -478,6 +564,7 @@ class FinancialEngine:
             currency=cur,
             limitations=_flag_limits(rec, [name]))
 
+    @_dated
     def get_ratio(self, entity: str | Entity, ratio: str, *, basis: Basis | str = "consolidated",
                   period: Any = "latest", fallback: bool = False) -> EngineResult:
         """One ratio. 'latest*' is the newest period of that kind: if its inputs are missing the
@@ -490,6 +577,7 @@ class FinancialEngine:
                                 limitations=(f"unknown ratio {ratio!r}; known: {', '.join(ratios.known())}",))
         return self._formula_result("ratio", ent, spec, basis, period, fallback)
 
+    @_dated
     def get_valuation(self, entity: str | Entity, kind: str, *, basis: Basis | str = "consolidated",
                       period: Any = "latest_annual", fallback: bool = False) -> EngineResult:
         """P/E, P/B, EV/EBITDA, market cap, yields... anything priced at the fiscal year end."""
@@ -516,6 +604,7 @@ class FinancialEngine:
                 out.append(_Point(r, o.value, o.leaves))
         return out
 
+    @_dated
     def get_growth(self, entity: str | Entity, metric: str, *, kind: str = "yoy",
                    basis: Basis | str = "consolidated") -> EngineResult:
         """% change between comparable periods: kind 'yoy' | 'qoq' | 'mom'. `metric` may be a
@@ -569,6 +658,7 @@ class FinancialEngine:
             limitations=(() if vp > ZERO else ("prior value <= 0; % change not meaningful, "
                                                "see components.abs_change",)) + _point_notes(records, prev, curr))
 
+    @_dated
     def get_cagr(self, entity: str | Entity, metric: str, *, basis: Basis | str = "consolidated",
                  years: Num | None = None) -> EngineResult:
         ent = self._entity(entity)
@@ -599,6 +689,7 @@ class FinancialEngine:
             + (("years must be positive; CAGR undefined",) if span <= ZERO else ())
             + _point_notes(records, first, last))
 
+    @_dated
     def compare_periods(self, entity: str | Entity, metrics: str | Sequence[str], *,
                         basis: Basis | str = "consolidated", a: Any, b: Any) -> EngineResult:
         ent = self._entity(entity)
@@ -633,6 +724,7 @@ class FinancialEngine:
         absolute = (spec.unit in _metrics.CURRENCY_KINDS) if spec else bool(reg and reg.kind in _metrics.CURRENCY_KINDS)
         results: list[dict[str, Any]] = []
         missing: list[dict[str, Any]] = []
+        limitations: list[str] = []
         unit = None
         for t in entities:
             try:
@@ -642,11 +734,12 @@ class FinancialEngine:
                 missing.append({"entity": str(t.name if isinstance(t, Entity) else t), "reason": str(e)})
                 continue
             unit = r.unit or unit
+            if self._as_of is not None and (undated := self._undated(r)):
+                limitations.append(f"{r.entity}: {self._undated_note(undated)}")
             if r.value is None:
                 missing.append({"entity": r.entity, "reason": r.limitations[0] if r.limitations else "no data"})
             else:
                 results.append({"entity": r.entity, "value": r.value, "currency": r.currency, "period": r.period})
-        limitations: list[str] = []
         periods = sorted({str(row["period"]) for row in results})
         if len(periods) > 1:
             limitations.append(f"entities are compared on different periods ({', '.join(periods)}); "
@@ -660,10 +753,15 @@ class FinancialEngine:
             results.sort(key=lambda x: x["value"], reverse=True)
             for i, row in enumerate(results, 1):
                 row["rank"] = i
-        return {"metric": metric, "kind": "ratio" if is_ratio else "metric", "unit": unit,
-                "basis": Basis(basis).value, "period": period, "results": results,
-                "missing": missing, "limitations": limitations}
+        limitations = list(dict.fromkeys(limitations))
+        out = {"metric": metric, "kind": "ratio" if is_ratio else "metric", "unit": unit,
+               "basis": Basis(basis).value, "period": period, "results": results,
+               "missing": missing, "limitations": limitations}
+        if self._as_of is not None:
+            out["as_of"] = self._as_of
+        return out
 
+    @_dated
     def decompose_metric(self, entity: str | Entity, metric: str, *, basis: Basis | str = "consolidated",
                          period: Any = "latest") -> EngineResult:
         ent = self._entity(entity)
@@ -763,12 +861,19 @@ class FinancialEngine:
     def get_segment_data(self, entity: str | Entity, *, basis: Basis | str = "consolidated",
                          period: Any = "latest_annual") -> SegmentResult:
         """Per-segment revenue and contribution % for one period."""
+        self._no_segments_as_of()
         return self._segments.get_segment_data(entity, basis=basis, period=period)
 
     def segment_growth(self, entity: str | Entity, *, basis: Basis | str = "consolidated",
                        kind: str = "yoy") -> SegmentResult:
         """Per-segment revenue change, growth %, and each segment's share of the total change."""
+        self._no_segments_as_of()
         return self._segments.segment_growth(entity, basis=basis, kind=kind)
+
+    def _no_segments_as_of(self) -> None:
+        if self._as_of is not None:
+            raise EngineError("segment data is not dated, so it cannot be viewed as of a date; "
+                              "use the engine without as_of")
 
     # ------------------------------------------------------------------ #
     # introspection

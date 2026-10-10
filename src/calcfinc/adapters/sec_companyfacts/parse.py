@@ -25,7 +25,14 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-from calcfinc.adapters.sec_companyfacts.tags import CANDIDATES, DEFAULT_FORMS
+from calcfinc.adapters.sec_companyfacts.tags import (
+    ANNUAL_FORMS,
+    CANDIDATES,
+    DEFAULT_FORMS,
+    IFRS_BANK_MARKERS,
+    INSURER_MARKERS,
+    INSURER_TOTAL_COSTS,
+)
 from calcfinc.fact import Basis, FinancialFact, MappingConfidence
 from calcfinc.num import ZERO, add, sub, to_decimal
 from calcfinc.period import DEFAULT_WINDOWS, PeriodWindows, ResolvedPeriod, classify_range, fiscal_year
@@ -59,6 +66,7 @@ class _Sel:
     currency: str | None
     versions: tuple[Entry, ...]    # oldest filing first; consecutive repeats removed
     group: str = ""                # concepts proven equal for this filer share a group (see _equivalent)
+    in_annual: bool = False        # some filing of this period was a 10-K / 20-F / 40-F, even if a 6-K came first
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +86,7 @@ class ParsedCompanyFacts:
     derived_quarters: int
     notes: tuple[str, ...]
     year_end_known: bool = True    # False when no full-year figures existed and December was only assumed
+    sector: str | None = None      # declared only for an IFRS bank, whose bank.* lines are not mapped
 
 
 # ---------------------------------------------------------------------------------------------
@@ -203,12 +212,13 @@ def _select(taxonomies: Mapping[str, Any], candidates: tuple[tuple[str, str], ..
         for key, entries in by_period.items():
             merged[canon.get(key, key)].extend(entries)
         merged_all.append(merged)
-    group = _equivalent([(f[2], {(k, e.accn): e.value for k, es in m.items() for e in es})
+    group = _equivalent([(f"{f[1]}:{f[2]}", {(k, e.accn): e.value for k, es in m.items() for e in es})
                          for f, m in zip(found, merged_all, strict=True)])
     chosen: dict[tuple[date | None, date], _Sel] = {}
     for (idx, tax, concept, currency, _), merged in zip(found, merged_all, strict=True):
         for key, entries in merged.items():
-            chosen.setdefault(key, _Sel(idx, tax, concept, currency, _versions(entries), group[concept]))
+            chosen.setdefault(key, _Sel(idx, tax, concept, currency, _versions(entries), group[f"{tax}:{concept}"],
+                                        any(e.form.startswith(ANNUAL_FORMS) for e in entries)))
     return chosen
 
 
@@ -257,32 +267,50 @@ class _Cum:
     concept: str | None
 
 
+def _at(sel: _Sel, known: date) -> Entry | None:
+    """The version of `sel` that was in the latest filing made on or before `known`."""
+    return next((v for v in reversed(sel.versions) if v.filed <= known), None)
+
+
 def _cumulative(cum: Mapping[int, tuple[date, _Sel]], direct: Mapping[int, tuple[date, _Sel]],
-                j: int) -> _Cum | None:
-    """Year-to-date value after `j` quarters: the reported cumulative figure, else the sum of the
-    reported single quarters (only if one concept supplied them all)."""
+                j: int, known: date) -> _Cum | None:
+    """Year-to-date value after `j` quarters as the filings made by `known` gave it: the reported
+    cumulative figure, else the sum of the reported single quarters (only if one concept supplied
+    them all)."""
     if j == 0:
         return _Cum(ZERO, None, None)
-    if j in cum:
-        latest = cum[j][1].versions[-1]
+    if j in cum and (latest := _at(cum[j][1], known)) is not None:
         return _Cum(latest.value, latest, cum[j][1].group)
     if all(i in direct for i in range(1, j + 1)):
         parts = [direct[i][1] for i in range(1, j + 1)]
         if len({p.group for p in parts}) != 1:
             return None
-        latest_parts = [p.versions[-1] for p in parts]
+        latest_parts = [_at(p, known) for p in parts]
+        if any(lp is None for lp in latest_parts):
+            return None
         total = ZERO
         for lp in latest_parts:
+            assert lp is not None
             total = add(total, lp.value)
-        return _Cum(total, max(latest_parts, key=lambda x: x.filed), parts[0].group)
+        return _Cum(total, max((lp for lp in latest_parts if lp is not None), key=lambda x: x.filed), parts[0].group)
     return None
 
 
-def _derive_quarters(chosen: Mapping[tuple[date | None, date], _Sel]) -> list[tuple[Entry, _Sel, str]]:
-    """Single quarters that were never reported on their own, from year-to-date figures."""
+def _drop_repeats(entries: list[Entry]) -> tuple[Entry, ...]:
+    kept: list[Entry] = []
+    for e in sorted(entries, key=lambda e: e.filed):
+        if not kept or kept[-1].value != e.value:
+            kept.append(e)
+    return tuple(kept)
+
+
+def _derive_quarters(chosen: Mapping[tuple[date | None, date], _Sel]) -> list[tuple[tuple[Entry, ...], _Sel, str]]:
+    """Single quarters that were never reported on their own, from year-to-date figures. Each comes
+    with its versions: the value the filings made by each date implied, so that a view as of a date
+    between a filing and its restatement still has the quarter."""
     flows = {k: v for k, v in chosen.items() if k[0] is not None}
     klass = {k: _duration_class(k[0], k[1]) for k in flows if k[0] is not None}
-    out: list[tuple[Entry, _Sel, str]] = []
+    out: list[tuple[tuple[Entry, ...], _Sel, str]] = []
     for start in sorted({k[0] for k, c in klass.items() if c in ("h", "n", "y") and k[0] is not None}):
         cum: dict[int, tuple[date, _Sel]] = {}
         for (s, e), c in klass.items():
@@ -296,22 +324,96 @@ def _derive_quarters(chosen: Mapping[tuple[date | None, date], _Sel]) -> list[tu
                     direct.setdefault(k, (e, flows[(s, e)]))
 
         for k in (2, 3, 4):
-            if k in direct or k not in cum:
+            if k not in cum:
                 continue
-            this, prev = _cumulative(cum, direct, k), _cumulative(cum, direct, k - 1)
-            if this is None or prev is None or this.entry is None or (prev.concept not in (None, this.concept)):
+            # A quarter that was only reported by a later filing (a recast) still had to be derived before it.
+            reported_from = min((v.filed for v in direct[k][1].versions), default=None) if k in direct else None
+            if (k - 1) not in cum and (k - 1) not in direct:
                 continue
-            prev_end = cum[k - 1][0] if (k - 1) in cum else direct[k - 1][0]
-            q_start, q_end = prev_end + timedelta(days=1), cum[k][0]
+            if k in direct:
+                # the filer's own dates for the quarter (they can differ from the neighbours' by a day), so
+                # the derived and the reported figure are versions of one period, not two periods
+                q_start, q_end = next(key for key, sel in flows.items() if sel is direct[k][1])
+                assert q_start is not None
+            else:
+                prev_end = cum[k - 1][0] if (k - 1) in cum else direct[k - 1][0]
+                q_start, q_end = prev_end + timedelta(days=1), cum[k][0]
             if q_start >= q_end:
                 continue
-            later = this.entry if prev.entry is None or this.entry.filed >= prev.entry.filed else prev.entry
-            entry = Entry(q_start, q_end, sub(this.value, prev.value), later.accn, later.form,
-                          max(this.entry.filed, prev.entry.filed if prev.entry else this.entry.filed))
+            dates = sorted({v.filed for pool in (direct, cum) for i, (_, sel) in pool.items() if i <= k
+                            for v in sel.versions if reported_from is None or v.filed < reported_from})
+            versions: dict[date, Entry] = {}
+            for known in dates:
+                this, prev = _cumulative(cum, direct, k, known), _cumulative(cum, direct, k - 1, known)
+                if this is None or prev is None or this.entry is None or (prev.concept not in (None, this.concept)):
+                    continue
+                later = this.entry if prev.entry is None or this.entry.filed >= prev.entry.filed else prev.entry
+                filed = max(this.entry.filed, prev.entry.filed if prev.entry else this.entry.filed)
+                versions[filed] = Entry(q_start, q_end, sub(this.value, prev.value), later.accn, later.form, filed)
+            if not versions:
+                continue
             why = f"single quarter derived: {_LABEL[k]} year-to-date less {_LABEL[k - 1]}"
             if k == 4:
                 why += " (the SEC reports no stand-alone fourth quarter)"
-            out.append((entry, cum[k][1], why))
+            out.append((_drop_repeats(list(versions.values())), cum[k][1], why))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# insurers: underwriting expenses
+# ---------------------------------------------------------------------------------------------
+
+TOTAL_COSTS = "_insurer_total_costs"       # selected like a metric, but only used to derive underwriting expenses
+
+
+def _premiums_are_the_business(selections: Mapping[str, Mapping[tuple[date | None, date], _Sel]]) -> bool:
+    """A filer that tags premiums earned is an insurer only if they are most of its revenue. A manufacturer
+    with a captive insurer tags them too, on a few percent of its sales, and is not an insurer."""
+    premiums = selections.get("insurance.net_earned_premium") or {}
+    revenue = selections.get("revenue") or {}
+    common = [k for k in premiums if k[0] is not None and _duration_class(k[0], k[1]) == "y" and k in revenue]
+    if not common:                                     # nothing to compare with: claims reported too is enough
+        return "insurance.claims_incurred" in selections
+    newest = max(common, key=lambda k: k[1])
+    total = revenue[newest].versions[-1].value
+    return total > 0 and premiums[newest].versions[-1].value * 2 >= total
+
+
+def _underwriting_expenses(costs: list[ParsedFact], parsed: list[ParsedFact]) -> list[ParsedFact]:
+    """insurance.underwriting_expenses = total benefits, losses and expenses less claims incurred, for each
+    period and, as the filings made by each date gave them, for each version of it."""
+    claims: dict[tuple[date | None, date | None], list[ParsedFact]] = defaultdict(list)
+    totals: dict[tuple[date | None, date | None], list[ParsedFact]] = defaultdict(list)
+    for p in parsed:
+        if p.fact.metric == "insurance.claims_incurred" and p.fact.value is not None:
+            claims[(p.fact.period_start, p.fact.period_end)].append(p)
+    for p in costs:
+        if p.fact.value is not None:
+            totals[(p.fact.period_start, p.fact.period_end)].append(p)
+
+    def known(group: list[ParsedFact], day: date) -> ParsedFact | None:
+        seen = [p for p in group if p.fact.reported_at is not None and p.fact.reported_at <= day]
+        return max(seen, key=lambda p: p.fact.reported_at or date.min) if seen else None
+
+    out: list[ParsedFact] = []
+    for key in claims.keys() & totals.keys():
+        last: Decimal | None = None
+        for day in sorted({p.fact.reported_at for p in claims[key] + totals[key] if p.fact.reported_at}):
+            c, t = known(claims[key], day), known(totals[key], day)
+            if c is None or t is None or c.fact.currency != t.fact.currency:
+                continue
+            assert c.fact.value is not None and t.fact.value is not None
+            value = sub(t.fact.value, c.fact.value)
+            if value == last:
+                continue
+            last = value
+            newer = c if (c.fact.reported_at or date.min) >= (t.fact.reported_at or date.min) else t
+            out.append(ParsedFact(replace(
+                c.fact, metric="insurance.underwriting_expenses", value=value, reported_at=day,
+                mapping_confidence=MappingConfidence.DERIVED,
+                mapping_reason=("derived: total benefits, losses and expenses less claims incurred; it also holds "
+                                "interest expense, interest credited to policyholders and other items")),
+                newer.accn, newer.form))
     return out
 
 
@@ -328,30 +430,43 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
     name = str(data.get("entityName") or f"CIK {cik}")
     taxonomies = data.get("facts") or {}
     notes: list[str] = []
-    if not taxonomies.get("us-gaap") and taxonomies.get("ifrs-full"):
-        notes.append("IFRS filer: ifrs-full concepts are not mapped in this version, so most metrics are absent")
+    ifrs = taxonomies.get("ifrs-full") or {}
 
     # Bank lines only for a filer that files like a bank: a concept such as Deposits or InterestExpense
     # also appears in insurers' and industrials' statements, where it does not mean what bank.* means.
     us = taxonomies.get("us-gaap") or {}
     is_bank = "NoninterestExpense" in us and "Deposits" in us
+    maybe_insurer = not is_bank and any(m in us for m in INSURER_MARKERS)
+    is_ifrs_bank = any(m in ifrs for m in IFRS_BANK_MARKERS)
+    if is_ifrs_bank:
+        notes.append("IFRS bank: declared a bank, so ratios that do not describe a bank are withheld; bank.* "
+                     "lines are not mapped for IFRS and interest expense is not read as a finance cost")
+    elif "InsuranceRevenue" in ifrs:
+        notes.append("IFRS 17 insurer: insurance.* lines are not mapped, because insurance revenue is not "
+                     "earned premium")
 
     home = _home_currency(taxonomies)
     selections: dict[str, dict[tuple[date | None, date], _Sel]] = {}
-    for metric, candidates in CANDIDATES.items():
-        spec = metrics.get(metric)
-        if spec is None or (metric.startswith("bank.") and not is_bank):
+    wanted = {**CANDIDATES, **({TOTAL_COSTS: INSURER_TOTAL_COSTS} if maybe_insurer else {})}
+    for metric, candidates in wanted.items():
+        spec = metrics.get("total_expenses" if metric == TOTAL_COSTS else metric)
+        if (spec is None or (metric.startswith("bank.") and not is_bank)
+                or (metric.startswith("insurance.") and not maybe_insurer)
+                or (metric == "finance_costs" and is_ifrs_bank)):
             continue
         chosen = _select(taxonomies, candidates, spec.kind, forms, home)
         if chosen:
             selections[metric] = chosen
 
+    if maybe_insurer and not _premiums_are_the_business(selections):
+        for name in [n for n in selections if n.startswith("insurance.") or n == TOTAL_COSTS]:
+            del selections[name]
+
     # The fiscal year end is where the annual report's years end. Twelve-month figures in a 10-Q
     # (Amazon files trailing-twelve-month statements) end every quarter and are not fiscal years.
-    annual_forms = ("10-K", "20-F", "40-F")
     year_ends = [e for ch in selections.values() for (s, e), sel in ch.items()
                  if s is not None and _duration_class(s, e) == "y"
-                 and any(v.form.startswith(annual_forms) for v in sel.versions)]
+                 and sel.in_annual]
     fye = fiscal_year_end_month or _infer_fye(year_ends) or 12
     if fiscal_year_end_month is None and not year_ends:
         notes.append("no full-year figures found; assumed a December fiscal year end")
@@ -363,7 +478,7 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
     parsed: list[ParsedFact] = []
     derived_count = 0
     for metric, chosen in selections.items():
-        spec = metrics.get(metric)
+        spec = metrics.get("total_expenses" if metric == TOTAL_COSTS else metric)
         assert spec is not None
         if not chosen:                      # every period was a year that does not end at the year end given
             continue
@@ -375,9 +490,9 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
             elif s is not None and not pit and _duration_class(s, e) in ("q", "y"):
                 items.append((s, e, sel, sel.versions, None))
         if spec.kind == "currency" and not pit:
-            for entry, template, why in _derive_quarters(chosen):
-                items.append((entry.start, entry.end, template, (entry,), why))
-                derived_count += 1
+            for versions, template, why in _derive_quarters(chosen):
+                items.append((versions[0].start, versions[0].end, template, versions, why))
+                derived_count += metric != TOTAL_COSTS         # that series is only an input, never stored
         # A concept is only an "alternate" if the filer uses a better-ranked one for this metric
         # elsewhere. A filer that only ever reports the second-choice concept is just using its own.
         best_used = min(sel.idx for sel in chosen.values())
@@ -385,7 +500,7 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
             period = (ResolvedPeriod(None, e, fiscal_year(e, fye), None, False) if s is None
                       else classify_range(s, e, fye, windows))
             alt = (f"alternate concept {sel.tax}:{sel.concept}; the filer reports a better-ranked concept "
-                   f"({CANDIDATES[metric][best_used][1]}) for other periods") if sel.idx > best_used else None
+                   f"({wanted[metric][best_used][1]}) for other periods") if sel.idx > best_used else None
             if derived_why:
                 confidence, reason = MappingConfidence.DERIVED, derived_why + (f"; {alt}" if alt else "")
             elif alt:
@@ -401,14 +516,18 @@ def parse_companyfacts(data: Mapping[str, Any], *, fiscal_year_end_month: int | 
                     is_point_in_time=s is None, reported_at=v.filed, mapping_confidence=confidence,
                     mapping_reason=reason), v.accn, v.form))
 
-    # US GAAP has no exceptional-items line, so profit before exceptional items is pre-tax income.
+    costs = [p for p in parsed if p.fact.metric == TOTAL_COSTS]
+    parsed = [p for p in parsed if p.fact.metric != TOTAL_COSTS] + _underwriting_expenses(costs, parsed)
+
+    # Neither US GAAP nor IFRS has an exceptional-items line, so profit before exceptional items is pre-tax income.
     parsed += [ParsedFact(replace(p.fact, metric="pbt_before_exceptional",
                                   mapping_confidence=MappingConfidence.DERIVED,
-                                  mapping_reason="US GAAP has no exceptional-items line; equals pre-tax income"),
+                                  mapping_reason="no exceptional-items line in US GAAP or IFRS; equals pre-tax income"),
                           p.accn, p.form) for p in parsed if p.fact.metric == "pbt"]
     parsed.sort(key=lambda p: (p.fact.metric, p.fact.period_end or date.min, p.fact.period_start or date.min,
                                p.fact.reported_at or date.min))
     currencies = Counter(p.fact.currency for p in parsed if p.fact.currency)
     return ParsedCompanyFacts(cik, name, fye, currencies.most_common(1)[0][0] if currencies else None,
                               tuple(parsed), derived_count, tuple(notes),
-                              year_end_known=fiscal_year_end_month is not None or bool(year_ends))
+                              year_end_known=fiscal_year_end_month is not None or bool(year_ends),
+                              sector="bank" if is_ifrs_bank else None)

@@ -57,9 +57,12 @@ def load_companyfacts(repos: Any, data: Mapping[str, Any], *, ticker: str | None
         if ent is None:
             ids = {"cik": parsed.cik, **({"ticker": ticker} if ticker else {})}
             ent = repos.entities.upsert(Entity(name=parsed.name, identifiers=ids, currency=parsed.currency,
-                                               fiscal_year_end_month=parsed.fiscal_year_end_month))
+                                               fiscal_year_end_month=parsed.fiscal_year_end_month,
+                                               sector=parsed.sector))
         elif parsed.year_end_known and ent.fiscal_year_end_month != parsed.fiscal_year_end_month:
             ent = repos.entities.upsert(replace(ent, fiscal_year_end_month=parsed.fiscal_year_end_month))
+        if parsed.sector and ent.sector is None:
+            ent = repos.entities.upsert(replace(ent, sector=parsed.sector))
         eid = int(ent.id or 0)
         source_ids: dict[str, int | None] = {}
         facts: list[FinancialFact] = []

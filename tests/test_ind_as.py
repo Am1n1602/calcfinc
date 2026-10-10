@@ -203,6 +203,36 @@ class TestXbrlFile(unittest.TestCase):
         self.assertEqual(len(reports), 2)
         self.assertEqual(FinancialEngine(repos).get_metric("SYN", "revenue").value, 900)
 
+    def test_dated_filings_keep_the_original_and_the_revision_as_versions(self):
+        revised = XBRL.replace(">1,000<", ">900<").replace(">1050<", ">950<")
+        repos = SqliteRepositories(":memory:")
+        self.addCleanup(repos.close)
+        revision = self.tmp(revised, "syn_Revision_Consolidated_30-Jun-2025.xbrl")
+        original = self.tmp(XBRL, "syn_Original_Consolidated_30-Jun-2025.xbrl")
+        ind.load_xbrl_files(repos, [revision, original], entity="SYN",
+                            reported_at={original.name: date(2025, 8, 1), revision.name: date(2025, 9, 15)})
+        eng = FinancialEngine(repos)
+        self.assertEqual(eng.get_metric("SYN", "revenue").value, 900)
+        self.assertEqual(eng.as_of("2025-08-30").get_metric("SYN", "revenue").value, 1000)
+
+    def test_per_file_dates_may_be_keyed_by_path_and_a_wrong_key_is_an_error(self):
+        revised = XBRL.replace(">1,000<", ">900<").replace(">1050<", ">950<")
+        revision = self.tmp(revised, "syn_Revision_Consolidated_30-Jun-2025.xbrl")
+        original = self.tmp(XBRL, "syn_Original_Consolidated_30-Jun-2025.xbrl")
+        repos = SqliteRepositories(":memory:")
+        self.addCleanup(repos.close)
+        ind.load_xbrl_files(repos, [original, revision], entity="SYN",
+                            reported_at={original: date(2025, 8, 1), str(revision): date(2025, 9, 15)})
+        self.assertEqual(FinancialEngine(repos).as_of("2025-08-30").get_metric("SYN", "revenue").value, 1000)
+        other = SqliteRepositories(":memory:")
+        self.addCleanup(other.close)
+        with self.assertRaisesRegex(ValueError, "no date for"):
+            ind.load_xbrl_files(other, [original, revision], entity="SYN", reported_at={original: date(2025, 8, 1)})
+        with self.assertRaisesRegex(ValueError, "no such file"):
+            ind.load_xbrl_files(other, [original, revision], entity="SYN",
+                                reported_at={original: None, revision: None, "typo.xbrl": date(2025, 9, 15)})
+        self.assertEqual(other.facts.list_facts(1), [])                  # nothing was loaded
+
     def test_the_basis_must_be_known(self):
         repos = SqliteRepositories(":memory:")
         self.addCleanup(repos.close)

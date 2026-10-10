@@ -1,4 +1,4 @@
-"""Accounting-identity checks on a period record (no estimation, no LLM).
+"""Accounting-identity checks on a period record. 
 
 Filings are rounded, so a check passes when the mismatch is within
 max(abs_tol, rel_tol x largest operand). A failed check never drops a record; it is reported

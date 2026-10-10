@@ -305,6 +305,35 @@ class TestEquityMethodIdentity(unittest.TestCase):
         self.assertEqual(check_values(inside), {"pbt_minus_tax_eq_profit_continuing_ops": True})
 
 
+class TestAsOfWithUndatedFacts(unittest.TestCase):
+    def setUp(self):
+        rows = [{"entity": "Q", "metric": "revenue", "period": "FY2026", "value": 100, "currency": "USD",
+                 "reported_at": "2027-02-01"},
+                {"entity": "Q", "metric": "revenue", "period": "FY2026", "value": 90, "currency": "USD",
+                 "reported_at": "2026-02-01"},                       # an earlier figure for the same period
+                {"entity": "Q", "metric": "net_profit", "period": "FY2026", "value": 10, "currency": "USD"}]
+        self.eng = FinancialEngine.from_records(rows)
+        self.addCleanup(self.eng.repos.close)
+
+    def test_a_fact_with_no_filing_date_stays_and_the_result_says_so(self):
+        r = self.eng.as_of("2026-06-01").get_ratio("Q", "net_profit_margin", period="FY2026")
+        self.assertEqual(r.value, D("11.11111111111111111111111111111111"))        # 10 / 90, the figure known then
+        self.assertTrue(any("net_profit have no filing date" in t for t in r.limitations))
+        later = self.eng.as_of("2027-06-01").get_ratio("Q", "net_profit_margin", period="FY2026")
+        self.assertEqual(later.value, 10)
+
+    def test_a_comparison_names_the_entity_whose_inputs_are_undated(self):
+        out = self.eng.as_of("2026-06-01").compare_companies("net_profit", ["Q"])
+        self.assertTrue(any(t.startswith("Q: ") and "net_profit have no filing date" in t
+                            for t in out["limitations"]))
+        self.assertEqual(str(out["as_of"]), "2026-06-01")
+        self.assertNotIn("as_of", self.eng.compare_companies("net_profit", ["Q"]))
+
+    def test_a_view_refuses_segment_data_because_it_is_not_dated(self):
+        with self.assertRaises(EngineError):
+            self.eng.as_of("2026-06-01").get_segment_data("Q")
+
+
 class TestCheckPeriods(unittest.TestCase):
     def engine(self, year, quarters=(100, 110, 120, 130)):
         rows = [{"entity": "Q", "metric": "revenue", "period": f"FY2026Q{n}", "value": v, "currency": "USD"}

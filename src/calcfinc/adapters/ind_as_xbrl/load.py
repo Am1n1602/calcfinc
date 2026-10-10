@@ -201,12 +201,36 @@ def load_xbrl_file(repos: Any, path: str | Path, *, entity: str, basis: Basis | 
     return load_raw_facts(repos, parse_xbrl_file(p, entity), entity=entity, basis=basis, source=source, **kwargs)
 
 
-def load_xbrl_files(repos: Any, paths: Iterable[str | Path], *, entity: str, **kwargs: Any) -> list[IndAsReport]:
+def load_xbrl_files(repos: Any, paths: Iterable[str | Path], *, entity: str,
+                    reported_at: date | Mapping[str | Path, date | None] | None = None,
+                    **kwargs: Any) -> list[IndAsReport]:
     """Load several filings, each "Revision" after the "Original" it corrects, whatever order they
     are given in. The filing carries no date, so with no `reported_at` a later load overwrites an
-    earlier one for the same period, and a revision must therefore come last."""
+    earlier one for the same period, and a revision must therefore come last. Give `reported_at` as
+    one date for all of them, or as {file: date} so that the original and its revision are kept as
+    two versions (which is what a view `as_of` a date needs). A key is a file name or the path as you
+    passed it; every file needs an entry (None for an undated one) and every entry must match a file,
+    so a misspelt key is an error, not a silently undated filing."""
     ordered = sorted((Path(p) for p in paths), key=lambda p: ("revision" in p.stem.lower(), p.name))
-    return [load_xbrl_file(repos, p, entity=entity, **kwargs) for p in ordered]
+    dates: dict[Path, date | None] = {}
+    if isinstance(reported_at, Mapping):
+        given = {Path(k): v for k, v in reported_at.items()}
+        used: set[Path] = set()
+        for p in ordered:
+            key = next((k for k in (p, Path(p.name)) if k in given), None)
+            if key is not None:
+                used.add(key)
+                dates[p] = given[key]
+        missing = [p.name for p in ordered if p not in dates]
+        unknown = [str(k) for k in given if k not in used]
+        if missing or unknown:
+            raise ValueError("reported_at must have one entry per file: "
+                             + (f"no date for {missing}" if missing else "")
+                             + ("; " if missing and unknown else "")
+                             + (f"no such file for {unknown}" if unknown else ""))
+    return [load_xbrl_file(repos, p, entity=entity,
+                           reported_at=dates[p] if isinstance(reported_at, Mapping) else reported_at,
+                           **kwargs) for p in ordered]
 
 
 def read_canonical_json(path: str | Path) -> list[dict[str, Any]]:

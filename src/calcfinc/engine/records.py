@@ -100,9 +100,16 @@ def _put(bucket: dict[str, Any], f: FinancialFact) -> None:
 
 def build_period_records(repos: Any, entity_id: int, basis: Basis | str, *,
                          windows: PeriodWindows = DEFAULT_WINDOWS,
-                         fiscal_year_end_month: int = 12) -> list[PeriodRecord]:
+                         fiscal_year_end_month: int = 12, as_of: date | None = None,
+                         facts: list[FinancialFact] | None = None) -> list[PeriodRecord]:
+    """With `as_of`, only what was known on that date: a fact first reported after it is left out, so a
+    restatement filed later does not show. A fact with no `reported_at` cannot be placed in time and stays.
+    `facts` is the entity's stored facts if the caller already has them; otherwise they are read."""
     basis = Basis(basis)
-    facts: list[FinancialFact] = repos.facts.list_facts(entity_id, basis=basis)
+    if facts is None:
+        facts = repos.facts.list_facts(entity_id, basis=basis)
+    if as_of is not None:
+        facts = [f for f in facts if f.reported_at is None or f.reported_at <= as_of]
 
     durations: dict[tuple[date | None, date | None], dict[str, Any]] = {}
     instants: dict[date | None, dict[str, Any]] = {}

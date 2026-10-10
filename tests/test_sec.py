@@ -14,11 +14,12 @@ from calcfinc import FinancialEngine, SqliteRepositories
 from calcfinc.adapters import sec_companyfacts as sec
 from calcfinc.adapters.sec_companyfacts import fetch
 
-A1, A2, A3, A4, A5, A8, A9 = (f"0000123456-{y}-0000{n:02d}" for y, n in
-                              ((25, 1), (25, 2), (25, 3), (26, 4), (26, 5), (26, 8), (27, 9)))
+A1, A2, A3, A4, A5, A8, A9, A10, A11 = (f"0000123456-{y}-0000{n:02d}" for y, n in
+                                        ((25, 1), (25, 2), (25, 3), (26, 4), (26, 5), (26, 8), (27, 9), (26, 10),
+                                         (26, 11)))
 FILED = {A1: "2025-05-02", A2: "2025-08-01", A3: "2025-10-31", A4: "2026-02-20", A5: "2026-05-01",
-         A8: "2026-02-01", A9: "2027-02-19"}
-FORM = {A1: "10-Q", A2: "10-Q", A3: "10-Q", A4: "10-K", A5: "10-Q", A8: "8-K", A9: "10-K"}
+         A8: "2026-02-01", A9: "2027-02-19", A10: "2026-03-10", A11: "2025-08-15"}
+FORM = {A1: "10-Q", A2: "10-Q", A3: "10-Q", A4: "10-K", A5: "10-Q", A8: "8-K", A9: "10-K", A10: "20-F", A11: "6-K"}
 
 
 def e(start, end, val, accn, **extra):
@@ -33,9 +34,9 @@ def concept(unit, *entries):
     return {"label": "x", "units": {unit: list(entries)}}
 
 
-def document(us=None, dei=None):
+def document(us=None, dei=None, ifrs=None):
     return {"cik": 1234567, "entityName": "Synthco Inc",
-            "facts": {"us-gaap": us or {}, **({"dei": dei} if dei else {})}}
+            "facts": {"us-gaap": us or {}, **({"dei": dei} if dei else {}), **({"ifrs-full": ifrs} if ifrs else {})}}
 
 
 Q1, Q2, Q3 = ("2025-01-01", "2025-03-31"), ("2025-04-01", "2025-06-30"), ("2025-07-01", "2025-09-30")
@@ -123,10 +124,10 @@ class TestPeriodsAndVersions(Base):
         fy = [f for f in self.repos.facts.list_facts(1, metric="revenue") if f.is_annual]
         self.assertEqual([(f.value, f.reported_at) for f in fy], [(450, date(2026, 2, 20))])
 
-    def test_the_derived_fourth_quarter_uses_the_latest_restated_year(self):
-        q4 = next(f for f in self.repos.facts.list_facts(1, metric="net_profit") if f.quarter == 4)
-        self.assertEqual(q4.value, 18)                                         # 78 - 60, not 80 - 60
-        self.assertEqual(q4.reported_at, date(2027, 2, 19))
+    def test_the_derived_fourth_quarter_has_a_version_for_each_filing_of_its_year(self):
+        q4 = [f for f in self.repos.facts.list_facts(1, metric="net_profit") if f.quarter == 4]
+        # 80 - 60 when the year was first filed, 78 - 60 once it was restated
+        self.assertEqual([(f.value, f.reported_at) for f in q4], [(20, date(2026, 2, 20)), (18, date(2027, 2, 19))])
 
     def test_forms_other_than_financial_statements_are_ignored(self):
         self.assertFalse(any(f.value == 999 for f in self.repos.facts.list_facts(1)))
@@ -272,12 +273,6 @@ class TestEntityAndProvenance(Base):
         self.assertEqual(self.repos.entities.get(1).currency, "EUR")
         self.assertEqual(self.repos.facts.list_facts(1, metric="revenue")[0].currency, "EUR")
 
-    def test_an_ifrs_only_filer_is_reported_as_unsupported_not_silently_empty(self):
-        doc = {"cik": 5, "entityName": "Ifrs Co", "facts": {"ifrs-full": {"Revenue": concept("EUR", e(*FY, 1, A4))}}}
-        self.load(doc)
-        self.assertEqual(self.report.facts, 0)
-        self.assertTrue(any("IFRS" in n for n in self.report.notes))
-
     def test_a_document_that_is_not_companyfacts_is_rejected(self):
         with self.assertRaises(ValueError):
             sec.parse_companyfacts({"facts": {}})
@@ -337,6 +332,68 @@ class TestWithTheEngine(Base):
         self.assertFalse(any("different filings" in t for t in q1.limitations))
 
 
+class TestAsOf(Base):
+    """The synthetic filer restates FY2025 net profit from 80 to 78 in the 10-K filed 2027-02-19."""
+
+    def setUp(self):
+        self.load()
+        self.eng = FinancialEngine(self.repos)
+        self.before, self.after = self.eng.as_of("2026-06-30"), self.eng.as_of(date(2027, 3, 1))
+
+    def test_a_view_before_the_restatement_shows_the_original_figure(self):
+        r = self.before.get_ratio("Synthco Inc", "roe", period="FY2025")
+        self.assertEqual((r.value, r.as_of), (D("20"), date(2026, 6, 30)))               # 80 / 400
+        self.assertEqual(self.after.get_ratio("Synthco Inc", "roe", period="FY2025").value, D("19.5"))   # 78 / 400
+        self.assertIsNone(self.eng.get_ratio("Synthco Inc", "roe", period="FY2025").as_of)
+
+    def test_a_trailing_year_is_still_there_between_a_filing_and_its_restatement(self):
+        # the fourth quarter is derived from the year, so it has to exist in both versions of the year
+        self.assertEqual(self.before.get_ratio("Synthco Inc", "net_profit_ttm", period="FY2025Q4").value, 80)
+        self.assertEqual(self.after.get_ratio("Synthco Inc", "net_profit_ttm", period="FY2025Q4").value, 78)
+
+    def test_later_periods_are_not_visible(self):
+        self.assertEqual(self.before.periods("Synthco Inc")[-1], "FY2026 Q1")        # filed 2026-05-01
+        early = self.eng.as_of("2025-09-01")
+        self.assertEqual(early.get_metric("Synthco Inc", "revenue").period, "FY2025 Q2")
+        self.assertEqual(early.get_growth("Synthco Inc", "revenue", kind="qoq").value, D("10"))
+
+    def test_before_any_filing_nothing_is_known_and_it_says_so(self):
+        r = self.eng.as_of("2025-01-01").get_metric("Synthco Inc", "revenue")
+        self.assertIsNone(r.value)
+        self.assertIn("facts reported later are left out of this view", r.limitations[-1])
+        # a figure that is missing for another reason is not blamed on the date
+        again = self.eng.as_of("2027-06-01").get_metric("Synthco Inc", "no_such_metric")
+        self.assertFalse(any("left out of this view" in t for t in again.limitations))
+
+    def test_many_views_read_the_store_once(self):
+        from unittest import mock
+        with mock.patch.object(self.repos.facts, "list_facts", wraps=self.repos.facts.list_facts) as spy:
+            for day in ("2025-09-01", "2026-03-01", "2026-09-01", "2027-03-01"):
+                view = self.eng.as_of(day)
+                view.get_metric("Synthco Inc", "revenue")
+                view.get_metric("Synthco Inc", "no_such_metric")             # may ask whether later facts exist
+        self.assertEqual(spy.call_count, 1)
+
+    def test_a_bad_date_is_an_error(self):
+        for bad in ("last tuesday", 20260630, None):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                self.eng.as_of(bad)
+
+
+class TestRecastQuarter(Base):
+    """A fourth quarter derived from the year, which a later filing reports itself with a start a day later."""
+
+    def test_the_derived_and_the_reported_quarter_are_versions_of_one_period(self):
+        q4_own = ("2025-10-02", "2025-12-31")
+        us = {"Revenues": concept("USD", e(*Q1, 100, A1), e(*H1, 210, A2), e(*N9, 330, A3), e(*FY, 450, A4),
+                                  e(*q4_own, 121, A9))}
+        self.load(document(us))
+        q4 = [f for f in self.repos.facts.list_facts(1, metric="revenue") if f.quarter == 4]
+        self.assertEqual({(f.period_start, f.period_end) for f in q4}, {(date(2025, 10, 2), date(2025, 12, 31))})
+        self.assertEqual([(f.value, f.reported_at) for f in q4], [(120, date(2026, 2, 20)), (121, date(2027, 2, 19))])
+        self.assertEqual(FinancialEngine(self.repos).periods("Synthco Inc").count("FY2025 Q4"), 1)
+
+
 class TestUsBank(Base):
     """The concepts a large US bank files under; 650 - 250 = 400 net interest income."""
 
@@ -368,6 +425,164 @@ class TestUsBank(Base):
         held = self.eng.get_ratio("Synthco Inc", "debt_to_equity", period="FY2025")
         self.assertIsNone(held.value)
         self.assertIn("does not apply to a bank", held.limitations[0])
+
+
+class TestUsInsurer(Base):
+    """The concepts a US property and casualty insurer files under; no total underwriting expense exists."""
+
+    US = {"PremiumsEarnedNet": concept("USD", e(*FY, 1000, A4)),
+          "PolicyholderBenefitsAndClaimsIncurredNet": concept("USD", e(*FY, 640, A4)),
+          "NetInvestmentIncome": concept("USD", e(*FY, 90, A4)),
+          "DeferredPolicyAcquisitionCostAmortizationExpense": concept("USD", e(*FY, 150, A4)),
+          "StockholdersEquity": concept("USD", e(None, "2025-12-31", 800, A4)),
+          "NetIncomeLoss": concept("USD", e(*FY, 120, A4))}
+
+    def test_the_report_counts_only_quarters_that_are_stored(self):
+        # the total benefits and expenses series derives three quarters, but it is only an input
+        us = {**self.US, "BenefitsLossesAndExpenses": concept("USD", e(*Q1, 200, A1), e(*H1, 420, A2),
+                                                              e(*N9, 650, A3), e(*FY, 900, A4))}
+        self.load(document(us))
+        self.assertEqual(self.report.derived_quarters, 0)
+
+    def test_premium_claims_and_investment_income_are_mapped_and_the_loss_ratio_works(self):
+        self.load(document(self.US))
+        got = {f.metric: f.value for f in self.repos.facts.list_facts(1) if f.metric.startswith("insurance.")}
+        self.assertEqual(got, {"insurance.net_earned_premium": 1000, "insurance.claims_incurred": 640,
+                               "insurance.net_investment_income": 90})
+        eng = FinancialEngine(self.repos)
+        self.assertEqual(eng.get_ratio("Synthco Inc", "insurance.loss_ratio", period="FY2025").value, 64)
+        held = eng.get_ratio("Synthco Inc", "quick_ratio", period="FY2025")
+        self.assertIn("does not apply to an insurer", held.limitations[0])
+
+    def test_underwriting_expenses_are_total_costs_less_claims_and_say_so(self):
+        us = {**self.US, "BenefitsLossesAndExpenses": concept("USD", e(*FY, 900, A4))}
+        self.load(document(us))
+        eng = FinancialEngine(self.repos)
+        r = eng.get_ratio("Synthco Inc", "insurance.combined_ratio", period="FY2025")
+        self.assertEqual(r.value, 90)                                   # (900 - 640) / 1000 + 640 / 1000
+        self.assertTrue(any("total benefits, losses and expenses less claims" in t for t in r.limitations))
+        self.assertEqual({i.metric for i in r.inputs},
+                         {"insurance.claims_incurred", "insurance.net_earned_premium",
+                          "insurance.underwriting_expenses"})
+
+    def test_the_derived_expenses_follow_a_restatement_of_either_part(self):
+        us = {**self.US, "BenefitsLossesAndExpenses": concept("USD", e(*FY, 900, A4), e(*FY, 880, A9)),
+              "PolicyholderBenefitsAndClaimsIncurredNet": concept("USD", e(*FY, 640, A4), e(*FY, 650, A9))}
+        self.load(document(us))
+        facts = self.repos.facts.list_facts(1, metric="insurance.underwriting_expenses")
+        got = [(f.value, f.reported_at) for f in facts]
+        self.assertEqual(got, [(260, date(2026, 2, 20)), (230, date(2027, 2, 19))])
+
+    def test_without_a_total_the_expense_ratios_say_what_is_missing(self):
+        self.load(document(self.US))
+        eng = FinancialEngine(self.repos)
+        for name in ("insurance.expense_ratio", "insurance.combined_ratio"):
+            r = eng.get_ratio("Synthco Inc", name, period="FY2025")
+            self.assertIsNone(r.value)
+            self.assertIn("underwriting_expenses not reported", r.limitations[0])
+
+    def test_a_property_casualty_only_premium_concept_counts(self):
+        us = {**self.US, "PremiumsEarnedNetPropertyAndCasualty": concept("USD", e(*FY, 1000, A4))}
+        del us["PremiumsEarnedNet"]
+        self.load(document(us))
+        self.assertEqual(self.facts("insurance.net_earned_premium", period_end=date(2025, 12, 31))
+                         [(date(2025, 1, 1), date(2025, 12, 31), date(2026, 2, 20))].value, 1000)
+
+    def test_a_manufacturer_with_a_captive_insurer_is_not_an_insurer(self):
+        # premiums are 30 of 1000 revenue: tagged, but not the business
+        us = {**self.US, "Revenues": concept("USD", e(*FY, 1000, A4)),
+              "PremiumsEarnedNet": concept("USD", e(*FY, 30, A4))}
+        self.load(document(us))
+        self.assertFalse(any(f.metric.startswith("insurance.") for f in self.repos.facts.list_facts(1)))
+        self.assertIsNone(FinancialEngine(self.repos)._sector(self.repos.entities.get(1), []))
+
+    def test_an_insurer_whose_premiums_are_most_of_its_revenue_is_one(self):
+        us = {**self.US, "Revenues": concept("USD", e(*FY, 1250, A4))}                   # premiums 1000 of 1250
+        self.load(document(us))
+        self.assertTrue(any(f.metric == "insurance.net_earned_premium" for f in self.repos.facts.list_facts(1)))
+
+    def test_net_investment_income_without_premiums_is_not_an_insurers(self):
+        # a fund or a business development company files NetInvestmentIncome too
+        self.load(document({"NetInvestmentIncome": concept("USD", e(*FY, 90, A4)),
+                            "BenefitsLossesAndExpenses": concept("USD", e(*FY, 900, A4))}))
+        self.assertFalse(any(f.metric.startswith("insurance.") or f.metric.startswith("_")
+                             for f in self.repos.facts.list_facts(1)))
+
+    def test_a_bank_that_also_files_premiums_is_not_an_insurer(self):
+        # Citigroup-style: an insurance arm's premiums beside the bank concepts
+        us = {**self.US, "NoninterestExpense": concept("USD", e(*FY, 300, A4)),
+              "Deposits": concept("USD", e(None, "2025-12-31", 6000, A4))}
+        self.load(document(us))
+        self.assertFalse(any(f.metric.startswith("insurance.") for f in self.repos.facts.list_facts(1)))
+
+
+class TestIfrsFiler(Base):
+    """A 20-F filer: IFRS concepts, annual statements in its own currency, quarters from a 6-K."""
+
+    IFRS = {"Revenue": concept("EUR", e(*FY, 450, A10), e(*Q1, 100, A11)),
+            "ProfitLoss": concept("EUR", e(*FY, 80, A10), e(*Q1, 18, A11)),
+            "ProfitLossAttributableToOwnersOfParent": concept("EUR", e(*FY, 78, A10)),
+            "Equity": concept("EUR", e(None, "2025-12-31", 400, A10)),
+            "Assets": concept("EUR", e(None, "2025-12-31", 1000, A10)),
+            "BasicEarningsLossPerShare": concept("EUR/shares", e(*FY, D("0.78"), A10)),
+            # trade AND other receivables are not trade receivables, and lease liabilities are not debt
+            "TradeAndOtherCurrentReceivables": concept("EUR", e(None, "2025-12-31", 90, A10)),
+            "LeaseLiabilities": concept("EUR", e(None, "2025-12-31", 60, A10))}
+
+    def test_ifrs_concepts_are_mapped_in_the_filers_currency(self):
+        self.load(document(ifrs=self.IFRS))
+        self.assertEqual(self.repos.entities.get(1).currency, "EUR")
+        got = {f.metric: f.value for f in self.repos.facts.list_facts(1) if f.period_end == date(2025, 12, 31)}
+        self.assertEqual(got["revenue"], 450)
+        self.assertEqual(got["net_profit_owners"], 78)
+        self.assertEqual((got["total_equity"], got["eps_basic"]), (400, D("0.78")))
+        self.assertEqual(self.report.notes, ())
+
+    def test_only_clean_concepts_are_read(self):
+        self.load(document(ifrs=self.IFRS))
+        metrics = {f.metric for f in self.repos.facts.list_facts(1)}
+        self.assertFalse(metrics & {"trade_receivables", "borrowings_current", "borrowings_noncurrent"})
+
+    def test_a_6k_quarter_sits_beside_the_20f_year(self):
+        self.load(document(ifrs=self.IFRS))
+        q1 = self.facts("revenue", period_start=date(2025, 1, 1), period_end=date(2025, 3, 31))
+        self.assertEqual([(f.value, f.quarter) for f in q1.values()], [(100, 1)])
+        self.assertEqual(self.report.fiscal_year_end_month, 12)
+
+    def test_ratios_work_for_an_annual_only_filer(self):
+        self.load(document(ifrs=self.IFRS))
+        eng = FinancialEngine(self.repos)
+        self.assertEqual(eng.get_ratio("Synthco Inc", "roe", period="FY2025").value, D("20"))        # 80 / 400
+        self.assertEqual(eng.get_ratio("Synthco Inc", "revenue_ttm").value, 450)
+
+    def test_continuing_operations_eps_is_not_taken_for_eps(self):
+        ifrs = {k: v for k, v in self.IFRS.items() if k != "BasicEarningsLossPerShare"}
+        ifrs["BasicEarningsLossPerShareFromContinuingOperations"] = concept("EUR/shares", e(*FY, D("0.9"), A10))
+        self.load(document(ifrs=ifrs))
+        self.assertFalse(any(f.metric == "eps_basic" for f in self.repos.facts.list_facts(1)))
+
+    def test_a_6k_that_repeats_the_20f_year_still_fixes_a_non_december_year_end(self):
+        # a March year reported first in a 6-K earnings release, then identically in the 20-F
+        y25, y24 = ("2024-04-01", "2025-03-31"), ("2023-04-01", "2024-03-31")
+        ifrs = {"Revenue": concept("EUR", e(*y25, 450, A11), e(*y25, 450, A10), e(*y24, 400, A11), e(*y24, 400, A10))}
+        self.load(document(ifrs=ifrs))
+        self.assertEqual(self.report.fiscal_year_end_month, 3)
+        self.assertFalse(any("no full-year" in n for n in self.report.notes))
+
+    def test_an_ifrs_bank_is_declared_a_bank_and_its_interest_is_not_a_finance_cost(self):
+        ifrs = {**self.IFRS, "DepositsFromBanks": concept("EUR", e(None, "2025-12-31", 300, A10)),
+                "InterestExpense": concept("EUR", e(*FY, 120, A10))}
+        self.load(document(ifrs=ifrs))
+        self.assertEqual(self.repos.entities.get(1).sector, "bank")
+        self.assertNotIn("finance_costs", {f.metric for f in self.repos.facts.list_facts(1)})
+        self.assertTrue(any("IFRS bank" in n for n in self.report.notes))
+        held = FinancialEngine(self.repos).get_ratio("Synthco Inc", "interest_coverage", period="FY2025")
+        self.assertIsNone(held.value)
+
+    def test_an_ifrs_17_insurer_is_named_not_mismapped(self):
+        self.load(document(ifrs={**self.IFRS, "InsuranceRevenue": concept("EUR", e(*FY, 300, A10))}))
+        self.assertFalse(any(f.metric.startswith("insurance.") for f in self.repos.facts.list_facts(1)))
+        self.assertTrue(any("IFRS 17" in n for n in self.report.notes))
 
 
 class TestRealFilerShapes(Base):
